@@ -8,6 +8,7 @@ import com.pokeemc.network.StorageSellPacket;
 import com.pokeemc.registry.ModMenuTypes;
 import com.poketrade.api.TradeResult;
 import com.poketrade.api.storage.StorageTransactionResult;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.Container;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.player.Inventory;
@@ -133,16 +134,34 @@ public class TransmutationTableMenu extends StorageBrowserMenu {
             }
             long value = PKMManager.getPkm(stack);
             if (value <= 0) {
-                return; // 无 PKM 值的物品无法存入
+                // [CHANGED] Bug E：无 PKM 价值的物品此前留在输入槽不清空，导致输入槽被永久占用，
+                // 之后任何 Shift/拖拽放入（quickMoveStack 的 moveItemStackTo 目标槽非空）都会失败，
+                // 表现为「按 Shift 不能直接把道具放入转化桌」。退还到背包并清空，保持输入槽随时可用。
+                if (ownerPlayer instanceof ServerPlayer serverPlayer) {
+                    serverPlayer.sendSystemMessage(Component.literal(
+                            "PokeEMC: " + stack.getHoverName().getString()
+                                    + " 无 PKM 价值，无法换算存入（已退还背包）"));
+                }
+                refundToPlayer(stack);
+                return;
             }
             long total;
             try {
                 total = Math.multiplyExact(value, stack.getCount());
             } catch (ArithmeticException ignored) {
+                refundToPlayer(stack);
                 return;
             }
             if (!PixelmonWallet.add(ownerPlayer, total)) {
-                return; // 入账失败：物品保留在输入槽
+                // [CHANGED] Bug E：入账失败（Pixelmon 钱包账户未就绪/异常）时同样退还，
+                // 避免无反应卡槽；物品不出入账，语义为「放入即换算」失败即回退。
+                if (ownerPlayer instanceof ServerPlayer serverPlayer) {
+                    serverPlayer.sendSystemMessage(Component.literal(
+                            "PokeEMC: 钱包入账失败，" + stack.getHoverName().getString()
+                                    + " ×" + stack.getCount() + " 已退还背包"));
+                }
+                refundToPlayer(stack);
+                return;
             }
             inputContainer.setItem(0, ItemStack.EMPTY);
             syncPkmFromWallet();
@@ -150,6 +169,23 @@ public class TransmutationTableMenu extends StorageBrowserMenu {
         } finally {
             processingInput = false;
         }
+    }
+
+    /**
+     * [CHANGED] Bug E：把输入槽物品退还到玩家背包并清空输入槽。
+     * 用 {@link #moveItemStackTo} 的 split 直接扣减输入槽引用，成功后槽位自动变空；
+     * 背包满时留在输入槽并提示，防止物品凭空丢失。
+     */
+    private void refundToPlayer(ItemStack stack) {
+        if (ownerPlayer instanceof ServerPlayer serverPlayer
+                && !moveItemStackTo(stack, PLAYER_INV_START, HOTBAR_END, false)) {
+            serverPlayer.sendSystemMessage(Component.literal(
+                    "PokeEMC: 背包已满，" + stack.getHoverName().getString()
+                            + " ×" + stack.getCount() + " 无法退还"));
+            return;
+        }
+        inputContainer.setItem(0, ItemStack.EMPTY);
+        broadcastChanges();
     }
 
     /** 服务端：尝试兑换物品（从玩家钱包扣 PKM），返回稳定结果码 */

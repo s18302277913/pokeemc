@@ -10,6 +10,8 @@ import com.poketrade.api.price.PriceQuote;
 import com.poketrade.api.price.PriceSource;
 import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.Item;
@@ -294,9 +296,16 @@ public final class ExchangePriceService {
                 if (tab.getType() != CreativeModeTab.Type.CATEGORY || !tab.contains(stack)) {
                     continue;
                 }
-                String name = tab.getDisplayName().getString();
-                if (name != null && !name.isBlank()) {
-                    return name;
+                // [CHANGED] Bug F：原版物品分类此前用服务端 getDisplayName().getString() 固化英文名
+                // （如 "Building Blocks"），服务端无语言包必然返回英文，客户端直接显示英文字样。
+                // 改为提取可翻译键（TranslatableContents#getKey，如 "itemGroup.buildingBlocks"），
+                // 由客户端按语言文件本地化（zh_cn → "建筑方块"）；非翻译型标签（模组 literal 名）
+                // 回退取原字符串，客户端 translatable(key) 无语言键时 fallback 显示原样。
+                Component display = tab.getDisplayName();
+                String categoryKey = display.getContents() instanceof TranslatableContents tc
+                        ? tc.getKey() : display.getString();
+                if (categoryKey != null && !categoryKey.isBlank()) {
+                    return categoryKey;
                 }
             }
         } catch (LinkageError | RuntimeException e) {

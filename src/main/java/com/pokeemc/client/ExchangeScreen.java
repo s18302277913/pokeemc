@@ -1924,6 +1924,15 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         };
     }
 
+    /** [CHANGED] Bug F：目录分类现为可翻译键（itemGroup.* / 模组 tab 键），按当前语言本地化；
+     *  非翻译键（模组 literal 名）translatable 无语言键时 fallback 显示原样；unknown 保持原样。 */
+    private static Component categoryLabel(String category) {
+        if (category == null || category.isEmpty() || "unknown".equals(category)) {
+            return Component.literal(category == null ? "unknown" : category);
+        }
+        return Component.translatable(category);
+    }
+
     @Override
     protected void renderLabels(GuiGraphics g, int mx, int my) {
         int x = mx - leftPos, y = my - topPos;
@@ -2299,7 +2308,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     List<Component> lines = new ArrayList<>();
                     lines.add(s.isEmpty() ? Component.literal(slot.itemId()) : s.getHoverName());
                     lines.add(Component.translatable("poketrade.exchange.snapshot.hint"));
-                    g.renderTooltip(this.font, lines, java.util.Optional.empty(), mouseX, mouseY);
+                    // [CHANGED] Bug G：仓储槽位 tooltip 同样带物品图标
+                    g.renderTooltip(this.font, lines, java.util.Optional.empty(), s, mouseX, mouseY);
                     return;
                 }
             }
@@ -2321,8 +2331,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 ItemStack s = stackOf(e);
                 List<Component> lines = List.of(
                         s.isEmpty() ? Component.literal(e.itemId()) : s.getHoverName(),
+                        // [CHANGED] Bug F：分类此前是服务端固化的英文名（Building Blocks 等），
+                        // 现在是可翻译键（itemGroup.buildingBlocks），经 categoryLabel 本地化后显示中文。
                         Component.translatable("poketrade.exchange.tooltip.source",
-                                e.category(), e.modId()),
+                                categoryLabel(e.category()), e.modId()),
                         Component.translatable("poketrade.exchange.buy")
                                 .append(Component.literal(": " + ExchangeUiModel.formatAmount(e.buyPrice()))),
                         Component.translatable("poketrade.exchange.sell")
@@ -2331,7 +2343,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     lines = new java.util.ArrayList<>(lines);
                     lines.add(Component.translatable("poketrade.exchange.buy.unavailable"));
                 }
-                g.renderTooltip(this.font, lines, java.util.Optional.empty(), mouseX, mouseY);
+                // [CHANGED] Bug G：自定义 tooltip 此前不带 ItemStack，无物品图标，与原版背包
+                // tooltip 样式不一致；传入 s 使 tooltip 左上角渲染物品图标，与基类 hoveredSlot
+                // tooltip（super.renderTooltip）观感一致。
+                g.renderTooltip(this.font, lines, java.util.Optional.empty(), s, mouseX, mouseY);
                 return;
             }
         }
@@ -2362,7 +2377,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 lines.add(s.isEmpty() ? Component.literal(line.itemId()) : s.getHoverName());
                 lines.add(Component.translatable("poketrade.exchange.cart.tooltip",
                         line.count(), ExchangeUiModel.formatAmount(subtotal)));
-                g.renderTooltip(this.font, lines, java.util.Optional.empty(), mouseX, mouseY);
+                // [CHANGED] Bug G：购物车格 tooltip 带物品图标
+                g.renderTooltip(this.font, lines, java.util.Optional.empty(), s, mouseX, mouseY);
                 return;
             }
         }
@@ -2396,7 +2412,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         }
         // 分类循环 + 可售筛选
         String catLabel = "分类：" + (slotCategoryIndex < 0 || slotCategoryIndex >= categories.size()
-                ? t("poketrade.exchange.category.all") : categories.get(slotCategoryIndex));
+                ? t("poketrade.exchange.category.all")
+                : categoryLabel(categories.get(slotCategoryIndex)).getString());
         catLabel = this.font.plainSubstrByWidth(catLabel,
                 Math.max(8, layout.slotCategory().width() - 2));
         PeStyle.button(g, this.font, layout.slotCategory().x(), layout.slotCategory().y(),

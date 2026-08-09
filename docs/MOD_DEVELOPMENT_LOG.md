@@ -165,3 +165,22 @@ _（后续会话按时间倒序追加于此）_
 - [ ] **已知边界**：客户端目录为打开 UI 时的快照，游戏内数据包重载（`/reload`）后需重新打开交易所/转化桌才会拉到新目录；服务端 `quote()` 已实时（版本检测），不会误售失败，仅展示层短暂旧价。可后续立项为目录推送/失效广播。
 - [ ] 1.20.x 旧版本物品（如 `calibrated_sculk_sensor` 等）定价由合成树覆盖，若个别掉落物仍无价可续补 `VANILLA_BASE`（可维护项）。
 - [x] **崩溃缺陷（会话 #6 续）**：Bug D 修复使 `ExchangeScreen.renderTooltip` 首次真正执行，暴露既有潜在 bug——`Component.translatable("poketrade.storage.permissions", perms)` 传入 `StringBuilder`，MC 要求 args 为 Component/Number/Boolean/String 单值，悬停仓储表头即抛 `IllegalArgumentException: TranslatableContents' arguments...` 崩溃（crash-2026-08-09_12.13.12）。已改 `perms.toString()`；其余分支（source/cart）参数均合法，其他 screen 用 `.getString()` 拼接无此问题。`gradlew build --offline` 全绿。
+
+### [2026-08-09 12:55] 会话 #7 — 三 Bug（转化桌 Shift 放入卡槽 / 交易所分类显示英文 / 交易所 tooltip 样式不一致）
+
+### 🎯 本次需求
+玩家反馈三个新问题（按首字母编号）：
+1. **Bug E**：按 Shift 不能直接把道具放入转化桌（疑似不支持组合键）。
+2. **Bug F**：显示「原版」二字的地方出现英文字样，疑似转码乱码，需核实真实原因。
+3. **Bug G**：交易所的指针信息（tooltip）样式与背包（原版）的不一致。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-28（Bug E 根因 = 输入槽被无价值/入账失败物品卡死，Shift 放入全失效）**：javap 实证 1.21.1 的 Shift 交互链路完整正常——`AbstractContainerScreen.mouseClicked` 检测左 Shift（key 340/344）→ `ClickType.QUICK_MOVE` → 服务端 `quickMoveStack` → `AbstractContainerMenu.moveItemStackTo`（整组放入用 `p_38904_.split()` 真实扣减源槽）→ `Slot.setByPlayer` → `set` → `setChanged` → 输入槽 `onInputChanged` 换算入钱包。真正的缺陷在 **`onInputChanged` 的两个静默返回分支**：物品无 PKM 价值（`value <= 0`）或 Pixelmon 钱包入账失败时物品**留在输入槽不清空**——输入槽（容量 1）被永久占用后，任何后续 Shift/拖拽放入都会因 `moveItemStackTo` 目标槽非空而失败，表现为「按 Shift 不能放入」。修复：新增 `refundToPlayer()`，无价/溢出/入账失败三种路径均把物品 `moveItemStackTo` 退还背包（失败留槽并系统消息提示，防丢物品），输入槽恒保持可用。[CHANGED] `TransmutationTableMenu.java`（onInputChanged + 新增 refundToPlayer，补充导入 `net.minecraft.network.chat.Component`）。
+- **ADR-29（Bug F 根因 = 服务端固化英文分类名，非转码问题）**：全量排查 zh_cn.json/en_us.json 键完全对齐（无缺键、无 GBK 转码乱码）——「原版二字变英文」的真实原因是 `ExchangePriceService.categoryOf()` 用服务端 `tab.getDisplayName().getString()` 固化分类名：服务端无语言包，`getString()` 必然返回英文（如 "Building Blocks"），客户端直接显示。修复：① `categoryOf()` 改为提取**可翻译键**（`display.getContents() instanceof TranslatableContents tc ? tc.getKey() : display.getString()`，如 `itemGroup.buildingBlocks`），非翻译型标签（模组 literal 名）回退原字符串；② 客户端新增 `ExchangeScreen.categoryLabel()` 辅助——`Component.translatable(key)` 按客户端语言本地化（zh_cn → 「建筑方块」），`unknown` 保持字面，无语言键时 fallback 原样。tooltip 来源行与「分类：」循环按钮两处显示均改走 `categoryLabel`。[CHANGED] `ExchangePriceService.java`/`ExchangeScreen.java`。
+- **ADR-30（Bug G 根因 = 自定义 tooltip 未传 ItemStack，无物品图标）**：原版背包 tooltip（基类 `super.renderTooltip` → `getTooltipFromContainerItem`）带**物品图标**；交易所自定义 tooltip 用 `g.renderTooltip(font, lines, Optional.empty(), x, y)`（无 ItemStack 重载）→ 无图标。修复：catalog 格/仓储槽/购物车格三处自定义 tooltip 改传 `ItemStack s`（`renderTooltip(font, lines, Optional.empty(), s, x, y)` 带图标重载），观感与背包一致；仓储表头/存入格提示（纯文本无具体物品）保持无图标。[CHANGED] `ExchangeScreen.java`。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [x] 三 Bug 全部修复，验证链全绿：`compileJava/compileTestJava` → `:test` 全量 → `runGameTestServer`（**40/40**）→ `build --offline`。
+- [ ] **Bug E 回归说明**：`onInputChanged` 换算依赖 Pixelmon `BankAccountProxy`，GameTest/纯 JVM 环境无 Pixelmon registry 且类加载不可达，未新增自动化单测；逻辑经 javap 反编译 `moveItemStackTo`/`Slot.setByPlayer`/`AbstractContainerScreen.mouseClicked` 三层实证 + 编译通过。待接入支持幂等钱包或 Pixelmon 可用测试环境后补测。
+- [ ] **Bug F 边界**：目录分类现为翻译键（`itemGroup.*`），客户端 `Component.translatable` 对无语言包的模组 tab 会 fallback 显示 key 本身（可读性劣于原英文名）；服务端目录重建（数据包 reload）后需重开交易所 UI 生效（同 ADR-25 已知边界）。
+- [ ] **Bug G 边界**：catalog/仓储/购物车 tooltip 已带图标；交易所「出售预览弹窗」行仍为 `drawString` 文本列表（非 tooltip），未纳入本次样式统一。
