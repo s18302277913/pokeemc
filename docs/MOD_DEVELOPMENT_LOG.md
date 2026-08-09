@@ -141,3 +141,26 @@
 - [ ] 基线 commit `2b77ec5` 为回退锚点。
 
 _（后续会话按时间倒序追加于此）_
+
+### [2026-08-09 11:55] 会话 #6 — 四 Bug 修复（价格同步 / 商品列表 / 1.21.1 新物品定价 / 容器 UI 悬停提示）
+
+### 🎯 本次需求
+玩家反馈四个运行时 Bug（按首字母编号）：
+1. **Bug A 价格不同步**：服务端与客户端价格不一致，部分商品即使有价格也无法售卖。
+2. **Bug B 商品列表不完整**：交易所/转化桌目录应有更多物品。
+3. **Bug C 1.21.1 新增原版道具没有价格**（风击人/试炼密室/犰狳/锻造台新物品）。
+4. **Bug D 转化桌 UI 内背包物品悬停不显示提示信息**。
+
+完整验证链全绿：`compileJava/compileTestJava` → 定向单测（价格/默认值）→ `:test` 全量 → `runGameTestServer`（**40/40 GameTest**）→ `gradlew build --offline`。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-25（Bug A/B 根因 = `forServer()` 单例冻结 PKM 快照时序）**：`ExchangePriceService.forServer()` 首次创建于**数据包 reload（ServerStarting 阶段）**，`pkmFallback()` 冻结当时的 `PKMManager.snapshot()`；而合成树 `PkmRecipeCalculator.computeAll()` 在 **ServerStartedEvent** 才运行，此后 `rebuild()` 仅由数据包重载触发。故服务端目录的 PKM 兜底区**永远缺全部合成推导值**（几百个可合成原版物品）→ 目录不完整（Bug B）、客户端 tooltip 本地算出的有价物品服务端 `quote()` 查不到 → `FREE_ITEM` 卖不了（Bug A）。修复三层：① `PokeEMC.onServerStarted` 在 `computeAll()` 后显式 `ExchangePriceService.forServer().rebuild()`；② `PKMManager` 新增 **VERSION 版本号**（`setManual`/`setComputed`/`clearComputed` 递增），`catalog()`/`quote()` 检测版本变化**惰性重建**（生产 live 实例），任何未来时序变化不再造成服务端 quote 与目录失配；③ `quote()` 改经 `catalog()` 取数（原直接读字段绕过检测——服务端 `sell()` 恰走 `quote()`，这是第②层里必须修的点，单测回归捕获）。[CHANGED] `PokeEMC.java`/`PKMManager.java`/`ExchangePriceService.java`。
+- **ADR-26（Bug B/C 商品覆盖不足 = 默认定价缺口）**：`VANILLA_BASE` 原仅 37 项，绝大多数原版物品靠合成树推导；而**掉落物/锻造/无配方物品**（各系木材的 stripped 变体、铜、紫水晶、1.21 新物品等）永远无法推导。修复：扩充 `DefaultPkmValues.VANILLA_BASE`——木材全系（8 种 log + planks + stripped）、下界木、竹、基础石材（深板岩/花岗岩/闪长岩/安山岩/凝灰岩/方解石/滴水石/玄武岩/黑石/地狱岩/末地石）、`copper_ingot`/`amethyst_shard`/`clay_ball`/`glowstone_dust`、常见掉落/作物、以及 **1.21/1.21.1 新道具**（`breeze_rod`=2048、`wind_charge`=512、`heavy_core`=16384、`mace`=18432、`wolf_armor`=128、`armadillo_scute`=64、`trial_key`=4096、`ominous_trial_key`=8192、`ominous_bottle`=64）。`PkmRecipeCalculator` 计算类型加入 `RecipeType.SMITHING`：`mace`（breeze_rod+heavy_core）可自动推导，镶饰/下界合金升级因 template 无价自然跳过（安全）。新增单测 `DefaultPkmValuesTest` 锁定覆盖。[CHANGED] `DefaultPkmValues.java`/`PkmRecipeCalculator.java`。
+  - **[BREAKING CHANGES]** 行为变更：大量此前无价的原版物品（各系木材/铜制品/1.21 新道具等）现在**有价**并可出现在交易所目录、可被转化桌存入——服务端无需迁移，旧存档直接生效；新增价格均经防套利门（buy≥sell）。
+- **ADR-27（Bug D 根因 = 容器子类未调用 `renderTooltip`）**：javap 实证 1.21.1 `AbstractContainerScreen.render()` **只更新 `hoveredSlot`、从不调用 `renderTooltip()`**——vanilla 约定由每个容器子类在 `render()` 末尾显式调用（如 ChestScreen `super.render()` 后接 `this.renderTooltip()`）。`TransmutationTableScreen`/`CondenserScreen` 未覆盖 `render()`，故全 UI（含背包物品、存入/取出槽）**永远不显示悬停提示**；`ExchangeScreen`/`StorageBrowserScreen` 覆盖了 `render()` 但遗漏末尾调用，同样无提示。修复：① `TransmutationTableScreen`/`CondenserScreen` 新增 `render()` override 末尾调 `this.renderTooltip(g, mouseX, mouseY)`（原始坐标）；② `ExchangeScreen`/`StorageBrowserScreen` 在 `endScaledRender()` **之前**（缩放矩阵态）调 `this.renderTooltip(g, lmx, lmy)`（局部坐标，与 `super.render` 的 `hoveredSlot` 命中坐标一致）。[CHANGED] `TransmutationTableScreen.java`/`CondenserScreen.java`/`ExchangeScreen.java`/`StorageBrowserScreen.java`。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [x] 四 Bug 全部修复并通过全量回归：`compileJava/compileTestJava` → `:test` 全量 → `runGameTestServer`（40/40）→ `build --offline`。
+- [x] 新增回归单测：`ExchangePriceServiceTest.liveCatalogTracksPkmVersionChanges`（Bug A）、`DefaultPkmValuesTest`（Bug B/C）。
+- [ ] **已知边界**：客户端目录为打开 UI 时的快照，游戏内数据包重载（`/reload`）后需重新打开交易所/转化桌才会拉到新目录；服务端 `quote()` 已实时（版本检测），不会误售失败，仅展示层短暂旧价。可后续立项为目录推送/失效广播。
+- [ ] 1.20.x 旧版本物品（如 `calibrated_sculk_sensor` 等）定价由合成树覆盖，若个别掉落物仍无价可续补 `VANILLA_BASE`（可维护项）。

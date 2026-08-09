@@ -6,6 +6,7 @@ import com.pokeemc.blockentity.TransmutationTableBlockEntity;
 import com.pokeemc.client.PokeEMCClient;
 import com.pokeemc.config.PokeTradeConfig;
 import com.pokeemc.exchange.price.ExchangeConfigLoader;
+import com.pokeemc.exchange.price.ExchangePriceService;
 import com.pokeemc.exchange.price.OfficialPriceLoader;
 import com.pokeemc.exchange.price.PriceOverrides;
 import com.pokeemc.emc.PKMManager;
@@ -150,6 +151,10 @@ public class PokeEMC {
                 // 阶段 6：探测已加载第三方模组并输出 warn/info（未适配降级告警）
                 ThirdPartyServices.onServerStarted(event.getServer());
                 PkmRecipeCalculator.computeAll(event.getServer().overworld());
+                // [CHANGED] Bug A/B：交易所目录在数据包 reload（ServerStarting 阶段）时首次构建，
+                // 早于本事件内的合成树计算，导致 PKM 兜底快照被冻结为空（缺全部推导值）。
+                // 计算完成后显式重建目录，服务端 quote 与客户端目录才能包含全部有价物品。
+                ExchangePriceService.forServer().rebuild();
             } catch (Exception e) {
                 LOGGER.error("PokeEMC: trade production install failed", e);
             }

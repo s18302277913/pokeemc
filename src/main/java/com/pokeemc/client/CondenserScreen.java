@@ -109,6 +109,16 @@ public class CondenserScreen extends AbstractContainerScreen<CondenserMenu> {
         filteredItems.sort(Comparator.comparingLong(PKMManager.PricedStack::value).reversed());
     }
 
+    /**
+     * [CHANGED] Bug D 修复：基类 {@link AbstractContainerScreen#render} 不调用 renderTooltip，
+     * 容器子类必须在 render 末尾显式调用，否则背包物品悬停提示不显示。
+     */
+    @Override
+    public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        super.render(g, mouseX, mouseY, partialTick);
+        this.renderTooltip(g, mouseX, mouseY);
+    }
+
     @Override
     protected void renderBg(GuiGraphics graphics, float partialTick, int mouseX, int mouseY) {
         int x = this.leftPos;

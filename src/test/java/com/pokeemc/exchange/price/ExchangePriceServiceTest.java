@@ -1,7 +1,9 @@
 package com.pokeemc.exchange.price;
 
+import com.pokeemc.emc.PKMManager;
 import com.poketrade.api.TradeItemId;
 import com.poketrade.api.price.PriceQuote;
+import net.minecraft.resources.ResourceLocation;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -157,5 +159,29 @@ class ExchangePriceServiceTest {
                         TradeItemId.parse("minecraft:bedrock"), 0L,
                         TradeItemId.parse("minecraft:barrier"), -1L));
         assertEquals(0, svc.catalog().entries().size());
+    }
+
+    @Test
+    void liveCatalogTracksPkmVersionChanges() {
+        // Bug A/B 回归：生产装配（live=true）读取全局 PKMManager 快照；
+        // 合成树计算（setComputed）发生在目录构建之后，catalog() 必须按版本号惰性重建，
+        // 否则服务端 quote 缺值导致「客户端显示有价却卖不了」。
+        // 测试用独立 key，避免影响其他用例（现有测试均不读取全局 PKM 状态）。
+        String id = "minecraft:netherite_upgrade_smithing_template";
+        ExchangePriceService svc = new ExchangePriceService(
+                Map.of(), Map.of(), Map.of(), true);
+        assertTrue(svc.quote(TradeItemId.parse(id)).isEmpty(), "初始快照无该物品");
+
+        // 模拟合成树在目录构建后补充新值 → 版本号变化
+        PKMManager.setComputed(
+                ResourceLocation.fromNamespaceAndPath("minecraft", "netherite_upgrade_smithing_template"), 2048L);
+        try {
+            Optional<PriceQuote> q = svc.quote(TradeItemId.parse(id));
+            assertTrue(q.isPresent(), "catalog() 必须检测到 PKM 版本变化并自动重建");
+            assertEquals(2048L, q.get().sellPrice(), "新值必须经 PKM 兜底进入目录");
+        } finally {
+            // 隔离：清理该测试写入的全局值，避免污染后续用例（clearComputed 会清空推导值）
+            PKMManager.clearComputed();
+        }
     }
 }

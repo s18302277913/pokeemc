@@ -116,6 +116,18 @@ public class TransmutationTableScreen extends AbstractContainerScreen<Transmutat
         filteredItems.sort(Comparator.comparingLong(PKMManager.PricedStack::value).reversed());
     }
 
+    /**
+     * [CHANGED] Bug D 修复：基类 {@link AbstractContainerScreen#render} 只负责更新 hoveredSlot，
+     * <b>不会</b>调用 renderTooltip（vanilla 约定由每个容器子类在 render 末尾显式调用）。
+     * 本屏此前未覆盖 render，导致背包物品/存入取出槽悬停不显示任何提示；
+     * 现在在基类渲染完成后调用 renderTooltip，列表条目走下方覆盖逻辑、背包走基类逻辑。
+     */
+    @Override
+    public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        super.render(g, mouseX, mouseY, partialTick);
+        this.renderTooltip(g, mouseX, mouseY);
+    }
+
     @Override
     protected void renderBg(GuiGraphics graphics, float partialTick, int mouseX, int mouseY) {
         int x = this.leftPos;

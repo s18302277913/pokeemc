@@ -1821,6 +1821,11 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         g.pose().popPose();
         g.flush();
         com.mojang.blaze3d.systems.RenderSystem.enableDepthTest();
+        // [CHANGED] Bug D 修复：基类 AbstractContainerScreen.render 不调用 renderTooltip，
+        // 容器子类必须显式调用，否则背包/仓储物品悬停提示不显示。
+        // 必须在 endScaledRender 前用缩放局部坐标调用，使自定义悬停检测与
+        // 基类 hoveredSlot（super.render 以 lmx/lmy 更新）在缩放矩阵下保持一致。
+        this.renderTooltip(g, lmx, lmy);
         endScaledRender(g);
     }
 

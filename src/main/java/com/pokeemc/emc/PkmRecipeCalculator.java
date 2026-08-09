@@ -43,8 +43,11 @@ public final class PkmRecipeCalculator {
         RecipeManager recipeManager = level.getRecipeManager();
         RegistryAccess access = level.registryAccess();
         List<RecipeHolder<?>> recipes = new ArrayList<>();
+        // [CHANGED] Bug C：加入 SMITHING（锻造台），使 1.21+ 锻造产出自动推导——
+        // mace（breeze_rod + heavy_core）等 base/addition 均有价时可按输入求和；
+        // 镶饰/下界合金升级因 template 物品无价自然跳过，不影响既有值。
         for (RecipeType<?> type : List.of(RecipeType.CRAFTING, RecipeType.SMELTING, RecipeType.BLASTING,
-                RecipeType.SMOKING, RecipeType.CAMPFIRE_COOKING, RecipeType.STONECUTTING)) {
+                RecipeType.SMOKING, RecipeType.CAMPFIRE_COOKING, RecipeType.STONECUTTING, RecipeType.SMITHING)) {
             @SuppressWarnings({"unchecked", "rawtypes"})
             Collection<RecipeHolder<?>> holders = (Collection) recipeManager.getAllRecipesFor((RecipeType) type);
             recipes.addAll(holders);

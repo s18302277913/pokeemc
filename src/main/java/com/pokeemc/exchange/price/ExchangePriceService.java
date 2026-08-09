@@ -50,6 +50,8 @@ public final class ExchangePriceService {
     /** 生产装配实例标记：rebuild 时重读最新静态快照（数据包重载即时生效）；测试实例用注入快照。 */
     private final boolean live;
     private volatile PriceCatalog catalog = PriceCatalog.empty();
+    /** 目录重建时记录的 PKM 快照版本；catalog() 读取时检测变化自动重建（Bug A/B 修复）。 */
+    private volatile long catalogPkmVersion = -1;
 
     /** 测试用构造：注入官方价与覆盖价（不读取全局静态快照）。 */
     public ExchangePriceService(
@@ -66,7 +68,8 @@ public final class ExchangePriceService {
         this(official, overrides, pkm, false);
     }
 
-    private ExchangePriceService(
+    /** 生产装配（live=true 读取全局静态快照）或测试装配（live=false 用注入快照）；包私有供同包回归测试。 */
+    ExchangePriceService(
             Map<TradeItemId, OfficialPriceParser.DoublePrice> official,
             Map<TradeItemId, PriceOverrides.OverridePrice> overrides,
             Map<TradeItemId, Long> pkm,
@@ -171,6 +174,7 @@ public final class ExchangePriceService {
                     q, categoryOf(q.itemId()), "", rarityOf(q.itemId()), q.itemId().namespace()));
         }
         this.catalog = new PriceCatalog(entries);
+        this.catalogPkmVersion = PKMManager.version();
         PokeEMC.LOGGER.info("PokeEMC: exchange catalog rebuilt with {} entries", entries.size());
     }
 
@@ -308,10 +312,20 @@ public final class ExchangePriceService {
     }
 
     public PriceCatalog catalog() {
+        // [CHANGED] Bug A/B：生产实例的 PKM 快照可能晚于目录构建发生变化
+        // （如合成树计算在 ServerStartedEvent 完成、数据包重载后配方驱动的新值）。
+        // 读取前按版本号惰性重建，保证服务端 quote 与客户端目录永远覆盖最新有价物品；
+        // 测试实例（live=false）快照固定，不参与版本检测。
+        if (live && catalogPkmVersion != PKMManager.version()) {
+            rebuild();
+        }
         return catalog;
     }
 
     public Optional<PriceQuote> quote(TradeItemId itemId) {
-        return catalog.quoteOf(itemId);
+        // [CHANGED] Bug A 修复：必须经 catalog() 触发 PKM 版本检测后再查价——
+        // 服务端每次出售走 pricing.quote() 重新查价，若直接读 catalog 字段会绕过
+        // 惰性重建，导致合成树补充的新值永远查不到（「有价却卖不了」）。
+        return catalog().quoteOf(itemId);
     }
 }

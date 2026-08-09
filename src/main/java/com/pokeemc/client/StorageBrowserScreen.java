@@ -215,6 +215,9 @@ public class StorageBrowserScreen
         if (renameBox != null) {
             renameBox.render(g, lmx, lmy, partialTick);
         }
+        // [CHANGED] Bug D 修复：基类 render 不调用 renderTooltip，容器子类必须显式调用；
+        // 缩放局部坐标与 beginScaledRender 矩阵、super.render 的 hoveredSlot 命中保持一致。
+        this.renderTooltip(g, lmx, lmy);
         endScaledRender(g);
     }
 

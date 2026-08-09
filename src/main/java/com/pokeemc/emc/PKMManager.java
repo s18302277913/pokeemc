@@ -27,6 +27,13 @@ public final class PKMManager {
     private static final Object2LongOpenHashMap<ResourceLocation> MANUAL_VALUES = new Object2LongOpenHashMap<>();
     private static final Object2LongOpenHashMap<String> BALL_VALUES = new Object2LongOpenHashMap<>();
 
+    /**
+     * PKM 快照版本号：任何价值变更（setManual/setComputed/clearComputed）都会递增，
+     * 供 {@link com.pokeemc.exchange.price.ExchangePriceService#catalog()} 检测快照变化后自动重建目录
+     * （修复 Bug A/B：合成树计算发生在服务端启动后期，数据包 reload 时构建的目录早于计算被冻结）。
+     */
+    private static volatile long VERSION = 0;
+
     static {
         PKM_VALUES.defaultReturnValue(NO_VALUE);
         MANUAL_VALUES.defaultReturnValue(NO_VALUE);
@@ -52,6 +59,7 @@ public final class PKMManager {
         }
         MANUAL_VALUES.put(item, value);
         PKM_VALUES.put(item, value);
+        VERSION++;
     }
 
     public static void setComputed(ResourceLocation item, long value) {
@@ -61,7 +69,13 @@ public final class PKMManager {
         long old = PKM_VALUES.getLong(item);
         if (old == NO_VALUE || value < old) {
             PKM_VALUES.put(item, value);
+            VERSION++;
         }
+    }
+
+    /** PKM 快照版本号：目录重建后快照发生变化时可据此自动重建（Bug A/B 修复）。 */
+    public static long version() {
+        return VERSION;
     }
 
     public static long getPkm(ItemStack stack) {
@@ -132,6 +146,7 @@ public final class PKMManager {
                 BALL_VALUES.put(entry.getKey().getPath(), entry.getLongValue());
             }
         }
+        VERSION++;
     }
 
     public static int size() {
