@@ -481,4 +481,59 @@ class ExchangeUiModelTest {
         // 乘法溢出按需确认（安全处理）
         assertTrue(ExchangeUiModel.shiftSellNeedsConfirm(Long.MAX_VALUE, Long.MAX_VALUE, 100_000));
     }
+
+    // ===== [CHANGED] 会话 #11：仓储手风琴网格行数（问题 2） =====
+
+    @Test
+    void accordionContentRowsFollowsCapacityNotOccupiedSlots() {
+        // 未裁剪行数（滚动范围）：单箱 27/7→4、双箱 54/7→8（第 8 排可滚的关键）
+        assertEquals(4, ExchangeUiModel.accordionContentRows(27, 7));
+        assertEquals(8, ExchangeUiModel.accordionContentRows(54, 7));
+        // 稀疏物品/空箱占位 1 行（不再因只放了 3 件就只显示 1 行）
+        assertEquals(1, ExchangeUiModel.accordionContentRows(4, 7));
+        assertEquals(1, ExchangeUiModel.accordionContentRows(0, 7));
+        // 大容器 / 非法列数兜底
+        assertEquals(16, ExchangeUiModel.accordionContentRows(108, 7));
+        assertEquals(1, ExchangeUiModel.accordionContentRows(54, 0));
+    }
+
+    @Test
+    void accordionVisibleRowsClampsToPanelLimit() {
+        // 裁剪行数（面板高度）：单箱 4、双箱 7（8 行被裁剪）、大容器也封顶
+        assertEquals(4, ExchangeUiModel.accordionVisibleRows(27, 7, 7));
+        assertEquals(7, ExchangeUiModel.accordionVisibleRows(54, 7, 7));
+        assertEquals(7, ExchangeUiModel.accordionVisibleRows(108, 7, 7));
+        // 空箱/非法 maxRows 兜底至少 1 行
+        assertEquals(1, ExchangeUiModel.accordionVisibleRows(0, 7, 7));
+        assertEquals(1, ExchangeUiModel.accordionVisibleRows(54, 7, 0));
+    }
+
+    // ===== [CHANGED] 会话 #11：仓储首次查询门（问题 1 自动展开） =====
+
+    @Test
+    void firstQueryGateExpandsOnlyOnFirstVisibleNonEmptyQuery() {
+        ExchangeUiModel.FirstQueryGate gate = new ExchangeUiModel.FirstQueryGate();
+        // 首包 + visible 非空 + 当前全收起 → 应自动展开首个
+        assertTrue(gate.onQuery(true, true));
+        // 后续包（10 秒自动刷新）即使全收起也不再展开
+        assertFalse(gate.onQuery(true, true));
+        assertFalse(gate.onQuery(true, false));
+    }
+
+    @Test
+    void firstQueryGateConsumesOnFirstQueryEvenWithoutAutoExpand() {
+        // 首包已有展开（expanded 非空）→ 不自动展开，但 received 已置位
+        ExchangeUiModel.FirstQueryGate gate = new ExchangeUiModel.FirstQueryGate();
+        assertFalse(gate.onQuery(true, false));
+        // 后续包恒 false
+        assertFalse(gate.onQuery(true, true));
+    }
+
+    @Test
+    void firstQueryGateVisibleEmptyDoesNotExpandLater() {
+        // 首包 visible 空 → 不展开，且后续走近（visible 非空 + 全收起）也不再自动展开
+        ExchangeUiModel.FirstQueryGate gate = new ExchangeUiModel.FirstQueryGate();
+        assertFalse(gate.onQuery(false, true));
+        assertFalse(gate.onQuery(true, true));
+    }
 }

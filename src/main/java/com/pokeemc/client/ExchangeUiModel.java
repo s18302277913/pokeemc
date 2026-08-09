@@ -650,6 +650,50 @@ final class ExchangeUiModel {
         return (totalRows + pageSize - 1) / pageSize;
     }
 
+    // ===== [CHANGED] 会话 #11：仓储手风琴网格行数（问题 2）与首次查询门（问题 1） =====
+
+    /**
+     * 容器容量对应的网格行数（不裁剪到面板高度上限）。
+     * <p>仅用于「滚动范围」：滚动条点击跳页、鼠标滚轮、渲染 scroll 钳制。
+     * 若此处也裁剪，双箱 54 槽→8 行但可见仅 7 行时 maxOffset=0，第 8 排永远不可达。</p>
+     */
+    static int accordionContentRows(int slotCount, int cols) {
+        if (cols <= 0) {
+            return 1;
+        }
+        return Math.max(1, (slotCount + cols - 1) / cols);
+    }
+
+    /**
+     * 容器容量对应的可见网格行数（裁剪到面板高度上限 {@code maxRows}）。
+     * <p>仅用于「展开面板高度」：单箱 27/7=4 行、双箱 54/7→8 行被裁剪为 7 可见行，
+     * 剩余第 8 排经滚动访问。空箱也返回至少 1 行占位骨架。</p>
+     */
+    static int accordionVisibleRows(int slotCount, int cols, int maxRows) {
+        return Math.max(1, Math.min(maxRows, accordionContentRows(slotCount, cols)));
+    }
+
+    /**
+     * 首次查询门：首个仓储查询回包才消费「自动展开首个仓储」，后续回包一律不再展开。
+     * <p>修复问题 1：10 秒自动刷新回包会走到 {@code onQueryResponse}，若用
+     * {@code expandedStorages.isEmpty()} 直接判断，玩家把全部仓储收起来后集合为空，
+     * 会被后续刷新回包误判为「首次打开」而强制展开。本门让「空集兜底」只在首个回包生效。</p>
+     */
+    static final class FirstQueryGate {
+        private boolean received;
+
+        /** @param visibleNotEmpty 本次回包可见仓储非空
+         *  @param expandedEmpty    当前展开集合为空
+         *  @return 是否应自动展开首个仓储（仅首个回包可能为 true，且需 visible 非空 + 全收起） */
+        boolean onQuery(boolean visibleNotEmpty, boolean expandedEmpty) {
+            if (received) {
+                return false;
+            }
+            received = true;
+            return visibleNotEmpty && expandedEmpty;
+        }
+    }
+
     static String resultKey(Operation operation, int resultCode) {
         TradeResult[] values = TradeResult.values();
         if (resultCode < 0 || resultCode >= values.length) {

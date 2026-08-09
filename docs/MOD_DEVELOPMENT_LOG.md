@@ -232,3 +232,22 @@ _（后续会话按时间倒序追加于此）_
 - [ ] **UI 交互依赖运行时验证**：GameTest 无法覆盖客户端渲染/点击，请游戏中验证——交易所界面左 Shift+左键点背包物品=卖整叠、左 Shift+右键=卖整组；右 Shift+点击仓储槽=取出（不与贩卖冲突）；价值超 10 万弹预览需二次确认；改 `config/poketrade-client.toml` 的 `shiftSellHand=OFF/RIGHT` 后行为相应变化。
 - [ ] **已知边界**：① 副手独有物品无槽位可点，无法触发 Shift 贩卖（可用批量出售按钮）；② 卖组按 itemId 聚合会把不同 NBT 的同 ID 物品一起卖（与现有 `sellInventory` 一致）；③ 贩卖键按下时拖卖记录不触发、拖动存入禁用（意图内）；④ 目录拖拽 ×64 仍用 `hasShiftDown()`（任意 Shift），贩卖键兼作 ×64 修饰键（既有行为）；⑤ 服务端单行路由 `sellFromCarried`（ExchangeSellPacket:100-112）的理论风险已由客户端 `carried.isEmpty()` 保护，未改协议。
 - [ ] **文案跟随配置问题**：`zh_cn.json` 的 `snapshot.hint` 现写「取出/贩卖（左右Shift区分，可在配置调整）」为静态文案，无法反映玩家实际选择的 `shiftSellHand`；如后续需要精确提示，可改为渲染时动态拼装。
+
+### [2026-08-09 14:15] 会话 #11 — 左侧仓储三连修复（自动展开 / 双箱格子一行 / 定价）
+
+### 🎯 本次需求
+玩家反馈左侧仓储三个问题：
+1. **仓储收起后每隔约 10 秒自动展开**——怀疑与自动刷新/状态继承有关。
+2. **兼容双箱后格子反而减少为一行**——双箱展开后只显示 1 行格子。
+3. **新道具价格显示为一元（测试价）+ 部分物品无价**——要求联网调研物品获取方式/作用性/稀有性后制定价格方案写入价格表。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-39（问题 1 根因 = 10 秒自动刷新回包 × `expandedStorages.isEmpty()` 兜底误判首次打开）**：`ExchangeScreen.render()`（`ExchangeScreen:1896-1904`）有真实时间 10 秒自动刷新定时器，每次回包走 `onQueryResponse`（`:784-820`）；原 `:807-810` 的 `if (expandedStorages.isEmpty()) { expandedStorages.add(visible.get(0)...) }` 把「玩家把全部仓储收起后的空集」误判为「首次打开」，强制展开第一个仓储——全收起后每隔约 10 秒必复发。另 `:819` `accordionScroll = 0` 每次回包把手风琴滚动位置清零（次生 bug：列表滚下去后每 10 秒弹回顶部）。修复：新增可测纯类 `ExchangeUiModel.FirstQueryGate`（`received` 一次性置位门：首个回包且 visible 非空 + 全收起才返回 true 自动展开），`onQueryResponse` 改 `if (firstQueryGate.onQuery(...)) { 展开 + accordionScroll=0 } else { accordionScroll = clampScroll(...) }`——首个回包重置到顶，后续回包（自动刷新/手动刷新/换半径）保留滚动位置并安全钳制。已知边界：首包即空（远离仓储）时不自动展开，后续走近也不展开，需手动点开（记录在案）。[CHANGED] `ExchangeScreen.java`/`ExchangeUiModel.java`。
+- **ADR-40（问题 2 根因 = 网格行数按快照「已占用槽数」而非「容器容量」）**：提交 `61edc06`（双箱兼容）把网格从固定 3 行改为按 `filteredSlots(snapshotsByStorage.get(id)).size()` ÷ `snapshotCols`(=7) 自适应；而服务端快照 `StorageHandleImpl.snapshot()` 只含非空槽（空槽被 `MinecraftSlotStore.itemId()` null 跳过），故箱子越空行数越少、空箱直接 `max(1, ceil(0/7))=1` 行。正确口径 `StorageDescriptor.slotCount()`（服务端正确上报 54/27）已存在于 `accordionEntries()` 的 descriptor，只是 `accordionGridRows(StorageId)` 未接收。修复引入两个量（Plan agent 核对的关键）：**未裁剪 `accordionContentRows(slotCount,cols)=max(1,ceil(slotCount/cols))`** 用于滚动范围（滚动条跳页 :1454、滚轮 :1734、渲染 scroll 钳制 :2605）——若此处也裁剪，双箱 54→8 行但可见仅 7 行时 `maxOffset=0`，第 8 排永远不可达（Bug #1 复发）；**裁剪 `accordionVisibleRows(slotCount,cols,maxRows)`** 用于展开面板高度（`accordionGridRows` 改收 descriptor）。`accordionSlotAt`（按 `index < slots.size()` 命中空位返回 null）保持不动。行为：单箱 4 行、双箱 7 可见行 + 可滚第 8 排、空/半空箱显示容量骨架；搜索/过滤只筛物品不改变网格高度；快照未加载时仍按容量铺满骨架。[CHANGED] `ExchangeScreen.java`/`ExchangeUiModel.java`。
+- **ADR-41（问题 3 定价 = 分层定价 + 补无价缺口；「显示为一元」的 31 件 Pixelmon 物品重定价）**：联网调研 Pixelmon wiki 确认获取方式/作用/稀有度（shopkeeper 收购价锚点：Nugget=750、Stardust=500、Big Pearl=1000、Pearl String=1500、Comet Shard=1500、Strange Souvenir=1500、Rare Bone=1000；Relic 系列来自 Stronghold 图书馆宝箱——Band 11.1%/Crown/Statue 5.6%，官方游戏中 Crown 价值最高 $300,000）。用户确认**分层定价**：易得基础（Forage/挖掘/草丛）256~768、中等 1024~2048、稀有 3072~8192、Relic 顶级 16384~65536。`shop.json` 31 件 `value:1` 全部按此写入（如 `stardust=512`、`nugget=1024`、`comet_shard=4096`、`relic_crown=65536`）。原版 `vanilla.json` 40 件 =1 中，树叶/泥土/石头/沙子/死珊瑚/草/雪/冰等 39 件**保持 1**（ProjectE EMC 惯例合理，非测试价），仅 `minecraft:kelp` 1→8 消除与 `DefaultPkmValues` 兜底（kelp=8）的不一致。**补无价缺口**（用户确认范围）：`sculk_sensor=1024`（古城探索、无配方；`calibrated_sculk_sensor` 由 sculk_sensor+紫水晶配方自动推导无需手填）、三色马铠（宝箱掉落 `iron=1024/golden=4096/diamond=8192`）、20 种 `pottery_shard=16`（考古/沙漠神殿装饰品）。全部为**纯数据改动**：改 JSON 后 `/reload` 或重启即生效（`PkmDataLoader.setManual` → `VERSION++` → `ExchangePriceService.catalog()` 惰性重建），`exchange/prices.json`（覆盖价，仅 master_ball）无需改动。[CHANGED] `data/poketrade/pkm/shop.json`/`vanilla.json`。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [x] 三连修复完成，验证链全绿：`compileJava` → `:test` 全量（**650 项**，含新增 accordionContentRows/accordionVisibleRows/FirstQueryGate 三个场景共 5 个测试）→ `runGameTestServer`（**40/40**）→ `build --offline`。
+- [ ] **UI 交互依赖运行时验证**：GameTest 无法覆盖客户端渲染/点击，请游戏中验证——① 交易所内收起全部仓储后等待 10 秒自动刷新，确认不再自动展开、手风琴滚动位置不被弹回顶部；② 空箱/双箱展开显示容量骨架（单箱 4 行、双箱 7 可见行，物品少于整行时仍显示空槽背景），双箱物品填满时滚轮/滚动条可滚到第 8 排；③ 打开 pkm 目录确认 31 件 Pixelmon 物品已分层标价、`sculk_sensor`/陶器碎片/马铠出现在目录且可出售。
+- [ ] **定价为经济平衡主观决策**：本次按用户确认的「分层定价」落地；若服务器经济实测异常（刷钱/物价过高），可在 `data/poketrade/pkm/shop.json` 单独调整（数据包为权威，重启或 `/reload` 生效）。
+- [ ] **已知边界（问题 1）**：首包即空（首次打开时远离任何仓储）不会自动展开首个仓储，需手动点开——若希望"首次见到仓储才展开"，需把 `FirstQueryGate` 的 received 置位改为「首个非空回包」才消费（当前为无条件一次性置位）。

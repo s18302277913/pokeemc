@@ -145,6 +145,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     private int slotCategoryIndex = -1;
     /** 展开的仓储（按 storageId 字符串）。 */
     private final java.util.Set<String> expandedStorages = new java.util.LinkedHashSet<>();
+    /** [CHANGED] 会话 #11：首个仓储查询回包才自动展开首个仓储（修复 10 秒刷新把全收起误判为首次打开）。 */
+    private final ExchangeUiModel.FirstQueryGate firstQueryGate = new ExchangeUiModel.FirstQueryGate();
     /** 每个仓储的快照与 revision（展开时拉取）。 */
     private final Map<String, StorageSnapshot> snapshotsByStorage = new java.util.HashMap<>();
     private final Map<String, Long> revisionsByStorage = new java.util.HashMap<>();
@@ -804,9 +806,18 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             if (selected == null || !ids.contains(selected.asString())) {
                 selectStorage(visible.get(0));
             }
-            if (expandedStorages.isEmpty()) {
+            // [CHANGED] 会话 #11：首次查询门——只有首个回包且当前全收起时才自动展开首个仓储。
+            // 之前用 expandedStorages.isEmpty() 直接判断，玩家收起全部仓储后集合为空，
+            // 10 秒自动刷新回包会把它误判为「首次打开」而强制展开（问题 1）。
+            if (firstQueryGate.onQuery(!visible.isEmpty(), expandedStorages.isEmpty())) {
                 expandedStorages.add(visible.get(0).storageId().asString());
                 requestStorageSnapshot(visible.get(0).storageId());
+                accordionScroll = 0; // 仅首次回包重置手风琴滚动到顶
+            } else {
+                // [CHANGED] 会话 #11：后续回包（自动刷新/手动刷新/换半径）保留手风琴滚动位置，
+                // 只钳制到有效范围，不再无条件清零导致列表每 10 秒弹回顶部。
+                accordionScroll = ExchangeUiModel.clampScroll(
+                        accordionScroll, storage.visibleStorages().size(), 1);
             }
             // 为已展开但尚无快照的仓储请求快照
             for (StorageDescriptor d : visible) {
@@ -816,7 +827,6 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 }
             }
         }
-        accordionScroll = 0;
     }
 
     @Override
@@ -1451,9 +1461,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             int sbX = entry.grid().right() + 1;
             if (x >= sbX && x <= sbX + 2 && y >= entry.grid().y() && y < entry.grid().bottom()) {
                 String key = id.asString();
-                int totalRows = Math.max(1,
-                        (filteredSlots(snapshotsByStorage.get(key)).size() + snapshotCols - 1)
-                                / snapshotCols);
+                // [CHANGED] 会话 #11：滚动范围按容器容量（未裁剪行数），否则双箱 8 行→可见 7 行时
+                // maxOffset=0，滚动条永远点不动，第 8 排不可达（问题 2）。
+                int totalRows = ExchangeUiModel.accordionContentRows(
+                        entry.descriptor().slotCount(), snapshotCols);
                 int visibleRows = Math.max(1, entry.grid().height() / SLOT);
                 int maxOffset = Math.max(0, totalRows - visibleRows);
                 if (maxOffset > 0) {
@@ -1510,9 +1521,9 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             ExchangeUiModel.Rect grid = null;
             int scroll = 0;
             if (expandedStorages.contains(d.storageId().asString())) {
-                // Bug #1：网格高度按实际槽位数量自适应（单箱 4 行、双箱 7 行），
-                // 大箱子不再被 3 行截断成"无法调用所有格子"。
-                int rows = accordionGridRows(d.storageId());
+                // [CHANGED] 会话 #11：网格高度按容器容量 slotCount 计算（单箱 4 行、双箱 7 可见行）。
+                // 之前按快照「已占用槽数」算，空/半空箱子只显示 1 行（问题 2）。
+                int rows = accordionGridRows(d);
                 scroll = storageScrolls.getOrDefault(d.storageId().asString(), 0);
                 grid = new ExchangeUiModel.Rect(layout.left().x() + 2, y + headerH,
                         snapshotCols * SLOT, rows * SLOT);
@@ -1523,11 +1534,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         return out;
     }
 
-    /** 展开网格可见行数：按当前槽位数量自适应，上限 {@link #MAX_ACCORDION_ROWS}（面板高度受限）。 */
-    private int accordionGridRows(StorageId id) {
-        List<StorageItemSlot> slots = filteredSlots(snapshotsByStorage.get(id.asString()));
-        int totalRows = Math.max(1, (slots.size() + snapshotCols - 1) / snapshotCols);
-        return Math.min(MAX_ACCORDION_ROWS, totalRows);
+    /** 展开网格可见行数：按容器容量 slotCount 计算并裁剪到面板高度上限（问题 2 修复）。 */
+    private int accordionGridRows(StorageDescriptor d) {
+        return ExchangeUiModel.accordionVisibleRows(
+                d.slotCount(), snapshotCols, MAX_ACCORDION_ROWS);
     }
 
     private AccordionEntry accordionEntryAt(int x, int y) {
@@ -1729,11 +1739,11 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (!leftCollapsed) {
             AccordionEntry over = accordionEntryAt(x, y);
             if (over != null && over.grid() != null && over.grid().contains(x, y)) {
-                // 展开网格滚动（可见行数随网格高度动态，双箱超限时最后几排可滚）
+                // 展开网格滚动（滚动范围按容器容量，双箱超限时最后几排可滚）
                 String key = over.descriptor().storageId().asString();
-                int totalRows = Math.max(1,
-                        (filteredSlots(snapshotsByStorage.get(key)).size() + snapshotCols - 1)
-                                / snapshotCols);
+                // [CHANGED] 会话 #11：滚动范围按容器容量（未裁剪行数），问题 2 修复。
+                int totalRows = ExchangeUiModel.accordionContentRows(
+                        over.descriptor().slotCount(), snapshotCols);
                 storageScrolls.put(key, ExchangeUiModel.clampScroll(
                         over.gridScroll() + (deltaY > 0 ? -1 : 1), totalRows,
                         over.grid().height() / SLOT));
@@ -2602,7 +2612,9 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         ExchangeUiModel.Rect grid = entry.grid();
         int cols = snapshotCols;
         int visibleRows = Math.max(1, grid.height() / SLOT);
-        int totalRows = Math.max(1, (slots.size() + cols - 1) / cols);
+        // [CHANGED] 会话 #11：滚动钳制范围按容器容量（未裁剪行数），否则双箱第 8 排索引不可达（问题 2）。
+        // slots 仍用于画物品与空态文案，与网格行数无关。
+        int totalRows = ExchangeUiModel.accordionContentRows(d.slotCount(), cols);
         int scroll = Math.max(0, Math.min(entry.gridScroll(),
                 Math.max(0, totalRows - visibleRows)));
         int start = scroll * cols;
