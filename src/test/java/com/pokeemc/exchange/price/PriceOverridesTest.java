@@ -22,7 +22,25 @@ class PriceOverridesTest {
         PriceOverrides.OverridePrice mb = out.get(TradeItemId.parse("pixelmon:master_ball"));
         assertNotNull(mb);
         assertEquals(5_000_000L, mb.buy());
+        // [CHANGED] Bug #3：卖出价尊重数据包定义（此处 sell=0 表示显式关闭回收）
         assertEquals(0L, mb.sell());
+    }
+
+    @Test
+    void masterBallSellRespectedWhenConfigured() {
+        // Bug #3：物品已在数据包定义价格就应能卖入转化桌——master_ball 的 sellPrice
+        // 不再被强制归零，数据包给出的卖出价（500 万）原样生效。
+        String json = """
+                { "items": {
+                    "pixelmon:master_ball": { "buyPrice": 5000000, "sellPrice": 5000000 }
+                } }
+                """;
+        Map<TradeItemId, PriceOverrides.OverridePrice> out =
+                PriceOverrides.parse(JsonParser.parseString(json));
+        PriceOverrides.OverridePrice mb = out.get(TradeItemId.parse("pixelmon:master_ball"));
+        assertNotNull(mb);
+        assertEquals(5_000_000L, mb.buy());
+        assertEquals(5_000_000L, mb.sell());
     }
 
     @Test

@@ -65,8 +65,12 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     /** 快照每页格数（7 列 × 2 行，{@code Layout.SNAP_COLS * Layout.SNAP_ROWS}）。 */
     private static final int SNAPSHOT_PAGE_CELLS =
             ExchangeUiModel.Layout.SNAP_COLS * ExchangeUiModel.Layout.SNAP_ROWS;
-    /** 手风琴展开网格的可见行数（7 列 × 3 行，超出滚动）。 */
-    private static final int ACCORDION_GRID_ROWS = 3;
+    /**
+     * 手风琴展开网格的<b>最大</b>可见行数（面板高度受限：listTop=72，7 列 × 7 行 = 210px &lt; 226 底部按钮）。
+     * 实际可见行数按槽位数量自适应（单箱 4 行、双箱 7 行），双箱 8 行时仅最后一排需滚动。
+     * Bug #1：原固定 3 行使大箱子 27-53 格几乎不可达——滚动条不可点击、滚轮必须悬停网格上。
+     */
+    private static final int MAX_ACCORDION_ROWS = 7;
 
     private final StorageViewModel storage = new StorageViewModel();
     private final String sessionId = UUID.randomUUID().toString().substring(0, 8);
@@ -419,6 +423,42 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         PacketDistributor.sendToServer(new ExchangeBuyPacket(
                 UUID.randomUUID().toString(), UUID.randomUUID().toString(),
                 List.of(new ExchangeBuyPacket.CartLineWire(entry.itemId(), Math.max(1, count)))));
+    }
+
+    /** 一键买入：把购物车内全部可买入条目批量发给服务端（服务端重新报价，全成或全败）。 */
+    private void buyCart() {
+        if (cart.isEmpty() || workflow.pending()) {
+            return;
+        }
+        if (!buyEnabled) {
+            sellMessage = t("poketrade.exchange.buy.disabled");
+            sellMessageColor = PeStyle.TEXT_ERROR;
+            return;
+        }
+        Map<String, Long> buyPrices = new LinkedHashMap<>();
+        for (ExchangeCatalogPacket.EntryWire entry : catalog) {
+            buyPrices.put(entry.itemId(), entry.buyPrice());
+        }
+        List<ExchangeBuyPacket.CartLineWire> lines = new ArrayList<>();
+        for (int i = 0; i < cart.size(); i++) {
+            ExchangeUiModel.CartLine line = cart.get(i);
+            if (buyPrices.getOrDefault(line.itemId(), 0L) <= 0L) {
+                continue; // 仅可出售条目防御性跳过（addToCart 已拦截，理论不出现）
+            }
+            lines.add(new ExchangeBuyPacket.CartLineWire(line.itemId(), line.count()));
+        }
+        if (lines.isEmpty()) {
+            sellMessage = t("poketrade.exchange.buy.unavailable");
+            sellMessageColor = PeStyle.TEXT_DIM;
+            return;
+        }
+        if (!workflow.begin(ExchangeUiModel.Operation.BUY, menu.getResultNonce())) {
+            return;
+        }
+        PacketDistributor.sendToServer(new ExchangeBuyPacket(
+                UUID.randomUUID().toString(), UUID.randomUUID().toString(), lines));
+        sellMessage = t("poketrade.exchange.buy.sent");
+        sellMessageColor = PeStyle.TEXT_DIM;
     }
 
     /** 拖动卖：弹出单一物品（已放回背包原槽）的出售预览。 */
@@ -1064,6 +1104,11 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             }
             return true;
         }
+        // 一键买入：把购物车内全部条目批量买入（全成或全败，服务端重新报价）
+        if (layout.cartBuy().contains(x, y) && !cart.isEmpty() && !workflow.pending()) {
+            buyCart();
+            return true;
+        }
         if (!leftCollapsed && layout.storageRefresh().contains(x, y) && !workflow.pending()) {
             requestStorages();
             StorageId selected = storage.getSelectedStorageId();
@@ -1105,15 +1150,6 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     ? StorageViewModel.FilterMode.ALL : StorageViewModel.FilterMode.SELL;
             storage.setFilterMode(next);
             requestStorages();
-            return true;
-        }
-        // 右栏收起时的批量出售小按钮（"卖"）
-        if (rightCollapsed && layout.cartSellCollapsed().contains(x, y) && !workflow.pending()) {
-            if (!sellQueue.isEmpty()) {
-                submitStorageSell();
-            } else if (sellEnabled) {
-                sellInventory();
-            }
             return true;
         }
         // 左栏收起/展开
@@ -1278,6 +1314,24 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             }
             return;
         }
+        // 网格滚动条点击：按 y 位置跳页（Bug #1：双箱超限行数时唯一明确的翻页手段）
+        if (entry.grid() != null) {
+            int sbX = entry.grid().right() + 1;
+            if (x >= sbX && x <= sbX + 2 && y >= entry.grid().y() && y < entry.grid().bottom()) {
+                String key = id.asString();
+                int totalRows = Math.max(1,
+                        (filteredSlots(snapshotsByStorage.get(key)).size() + snapshotCols - 1)
+                                / snapshotCols);
+                int visibleRows = Math.max(1, entry.grid().height() / SLOT);
+                int maxOffset = Math.max(0, totalRows - visibleRows);
+                if (maxOffset > 0) {
+                    int relY = y - entry.grid().y();
+                    int target = Math.round((float) relY / entry.grid().height() * maxOffset);
+                    storageScrolls.put(key, Math.max(0, Math.min(target, maxOffset)));
+                    return;
+                }
+            }
+        }
         // 网格槽位：先确保该仓储被选中，再执行操作
         StorageId selected = storage.getSelectedStorageId();
         if (selected == null || !selected.equals(id)) {
@@ -1323,14 +1377,24 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             ExchangeUiModel.Rect grid = null;
             int scroll = 0;
             if (expandedStorages.contains(d.storageId().asString())) {
+                // Bug #1：网格高度按实际槽位数量自适应（单箱 4 行、双箱 7 行），
+                // 大箱子不再被 3 行截断成"无法调用所有格子"。
+                int rows = accordionGridRows(d.storageId());
                 scroll = storageScrolls.getOrDefault(d.storageId().asString(), 0);
                 grid = new ExchangeUiModel.Rect(layout.left().x() + 2, y + headerH,
-                        snapshotCols * SLOT, ACCORDION_GRID_ROWS * SLOT);
+                        snapshotCols * SLOT, rows * SLOT);
             }
             out.add(new AccordionEntry(d, header, grid, scroll));
-            y += headerH + (grid == null ? 0 : ACCORDION_GRID_ROWS * SLOT);
+            y += headerH + (grid == null ? 0 : grid.height());
         }
         return out;
+    }
+
+    /** 展开网格可见行数：按当前槽位数量自适应，上限 {@link #MAX_ACCORDION_ROWS}（面板高度受限）。 */
+    private int accordionGridRows(StorageId id) {
+        List<StorageItemSlot> slots = filteredSlots(snapshotsByStorage.get(id.asString()));
+        int totalRows = Math.max(1, (slots.size() + snapshotCols - 1) / snapshotCols);
+        return Math.min(MAX_ACCORDION_ROWS, totalRows);
     }
 
     private AccordionEntry accordionEntryAt(int x, int y) {
@@ -1350,7 +1414,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         }
         int col = (x - entry.grid().x()) / SLOT;
         int row = (y - entry.grid().y()) / SLOT;
-        if (col < 0 || col >= snapshotCols || row < 0 || row >= ACCORDION_GRID_ROWS) {
+        int visibleRows = entry.grid().height() / SLOT;
+        if (col < 0 || col >= snapshotCols || row < 0 || row >= visibleRows) {
             return null;
         }
         int index = entry.gridScroll() * snapshotCols + row * snapshotCols + col;
@@ -1531,13 +1596,14 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (!leftCollapsed) {
             AccordionEntry over = accordionEntryAt(x, y);
             if (over != null && over.grid() != null && over.grid().contains(x, y)) {
-                // 展开网格滚动
+                // 展开网格滚动（可见行数随网格高度动态，双箱超限时最后几排可滚）
                 String key = over.descriptor().storageId().asString();
                 int totalRows = Math.max(1,
                         (filteredSlots(snapshotsByStorage.get(key)).size() + snapshotCols - 1)
                                 / snapshotCols);
                 storageScrolls.put(key, ExchangeUiModel.clampScroll(
-                        over.gridScroll() + (deltaY > 0 ? -1 : 1), totalRows, ACCORDION_GRID_ROWS));
+                        over.gridScroll() + (deltaY > 0 ? -1 : 1), totalRows,
+                        over.grid().height() / SLOT));
                 return true;
             }
             if (over != null) {
@@ -1912,6 +1978,14 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             PeStyle.button(g, this.font, layout.cartSell().x(), layout.cartSell().y(),
                     csw, layout.cartSell().height(), cartSellLabel,
                     (!sellQueue.isEmpty() || sellEnabled) && !workflow.pending(), false, hovered, mx, my);
+            // 一键买入：紧贴一键出售下方，购物车非空且买入未停用时可用
+            int cbw = layout.cartBuy().width();
+            String cartBuyLabel = this.font.plainSubstrByWidth(
+                    t("poketrade.exchange.buy.cart"), Math.max(8, cbw - 2));
+            hovered = layout.cartBuy().contains(x, y);
+            PeStyle.button(g, this.font, layout.cartBuy().x(), layout.cartBuy().y(),
+                    cbw, layout.cartBuy().height(), cartBuyLabel,
+                    !cart.isEmpty() && buyEnabled && !workflow.pending(), false, hovered, mx, my);
         }
         // 购物车数量控制（右栏操作区，选中格时）
         boolean qtyActive = !rightCollapsed && selectedCart >= 0 && selectedCart < cart.size();
@@ -1984,13 +2058,6 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         PeStyle.button(g, this.font, layout.collapseRight().x(), layout.collapseRight().y(),
                 layout.collapseRight().width(), layout.collapseRight().height(),
                 rightBtn, true, false, layout.collapseRight().contains(x, y), mx, my);
-        // 右栏收起时保留批量出售入口
-        if (rightCollapsed) {
-            PeStyle.button(g, this.font, layout.cartSellCollapsed().x(),
-                    layout.cartSellCollapsed().y(),
-                    layout.cartSellCollapsed().width(), layout.cartSellCollapsed().height(),
-                    "卖", true, false, layout.cartSellCollapsed().contains(x, y), mx, my);
-        }
         // 原版容器标题：左栏展开时位于左栏顶部(8,7)；左栏收起时搜索框占满顶行，隐藏
         if (!leftCollapsed) {
             String tLabel = this.font.plainSubstrByWidth(this.title.getString(),
@@ -2385,11 +2452,12 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         List<StorageItemSlot> slots = filteredSlots(snapshotsByStorage.get(key));
         ExchangeUiModel.Rect grid = entry.grid();
         int cols = snapshotCols;
+        int visibleRows = Math.max(1, grid.height() / SLOT);
         int totalRows = Math.max(1, (slots.size() + cols - 1) / cols);
         int scroll = Math.max(0, Math.min(entry.gridScroll(),
-                Math.max(0, totalRows - ACCORDION_GRID_ROWS)));
+                Math.max(0, totalRows - visibleRows)));
         int start = scroll * cols;
-        for (int row = 0; row < ACCORDION_GRID_ROWS; row++) {
+        for (int row = 0; row < visibleRows; row++) {
             for (int col = 0; col < cols; col++) {
                 int index = start + row * cols + col;
                 int sx = grid.x() + col * SLOT;
@@ -2410,7 +2478,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             }
         }
         PeStyle.scrollbar(g, grid.right() + 1, grid.y(), grid.height(),
-                totalRows, ACCORDION_GRID_ROWS, scroll);
+                totalRows, visibleRows, scroll);
         if (slots.isEmpty()) {
             g.drawString(this.font, t("poketrade.gui.empty"),
                     grid.x() + 2, grid.y() + 8, PeStyle.TEXT_DIM);

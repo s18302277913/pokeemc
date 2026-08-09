@@ -120,9 +120,10 @@ final class ExchangeUiModel {
             controls.put("storageDeposit", new Rect(left.x + 62, 228, 40, 12));
             // 物品搜索框（过滤展开箱子的槽位）
             controls.put("storageSearch", new Rect(left.x + 2, left.y + 16, 118, 10));
-            // 右栏底部操作：清空 / 批量出售
+            // 右栏底部操作：清空 / 批量出售 / 批量买入（一键买入紧贴一键出售之下）
             controls.put("cartClear", new Rect(right.x, 154, 40, 12));
             controls.put("cartSell", new Rect(right.x + 42, 154, 88, 12));
+            controls.put("cartBuy", new Rect(right.x + 42, 168, 88, 12));
             // 右栏统计行（购物车网格之下、数量控制之上）
             controls.put("cartCapacity", new Rect(right.x, right.y + 76, RIGHT_W, 8));
             controls.put("cartItems", new Rect(right.x, right.y + 84, RIGHT_W, 8));
@@ -145,10 +146,6 @@ final class ExchangeUiModel {
                     left.y - 14, 14, 14));
             controls.put("collapseRight", new Rect(
                     rightCollapsed ? windowWidth - 30 : right.x + CART_COLS * 18 - 18,
-                    middle.y - 14, 14, 14));
-            // 右栏收起时仍保留批量出售入口（顶栏小按钮"卖"）
-            controls.put("cartSellCollapsed", new Rect(
-                    rightCollapsed ? windowWidth - 46 : right.x + CART_COLS * 18 - 40,
                     middle.y - 14, 14, 14));
             // 预览模态（居中；窄窗口时收窄以保持在窗口内）。高度需容纳：
             // 标题 + 来源行 + 仓储信息行 + 6 行物品 + 总计/跳过/截断 + 按钮
@@ -214,9 +211,9 @@ final class ExchangeUiModel {
             return controls.get("cartSell");
         }
 
-        /** 右栏收起时的批量出售小按钮。 */
-        Rect cartSellCollapsed() {
-            return controls.get("cartSellCollapsed");
+        /** 购物车批量买入（把购物车内全部条目一次买入，紧贴批量出售之下）。 */
+        Rect cartBuy() {
+            return controls.get("cartBuy");
         }
 
         Rect qtyOne() {

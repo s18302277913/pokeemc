@@ -12,8 +12,10 @@ import java.util.Map;
 /**
  * 交易所覆盖价数据包（{@code data/poketrade/exchange/prices.json}）。
  *
- * <p>大师球购买价固定为 {@value #MASTER_BALL_BUY_PRICE} PKM 且只买不卖（规格硬规则）：数据包未给出时自动注入默认值；
- * 给出且 buy 不等于固定值时抛出 {@link IllegalStateException} 报告配置错误（不静默回退）；sell 一律强制为 0。
+ * <p>大师球购买价固定为 {@value #MASTER_BALL_BUY_PRICE} PKM（规格硬规则）：数据包未给出时自动注入默认值；
+ * 给出且 buy 不等于固定值时抛出 {@link IllegalStateException} 报告配置错误（不静默回退）。
+ * <b>卖出价尊重数据包定义</b>（由 {@code sellPrice} 决定，默认 0 = 不回收）；不再强制归零，
+ * 保证「数据包已定义价格、玩家即可卖入转化桌」（Bug #3 修复）。
  * 解析规则与 {@link OfficialPriceParser} 一致：负数 clamp 为 0、非法 id 跳过、双零条目忽略。</p>
  */
 public final class PriceOverrides {
@@ -65,16 +67,17 @@ public final class PriceOverrides {
                 }
             }
         }
-        // 大师球：固定购买价、固定只买不卖（规格硬规则，覆盖数据包 sell 值，防止配置打破）
+        // 大师球：购买价固定（硬校验，防止配置打破经济）；卖出价尊重数据包 sellPrice
+        //（[CHANGED] Bug #3：不再强制 sell=0——物品已在数据包定义价格就应能卖入转化桌）。
         OverridePrice mb = out.get(MASTER_BALL);
         if (mb == null) {
+            // 数据包未给出大师球时注入默认（买 500 万，默认不回收）
             out.put(MASTER_BALL, new OverridePrice(MASTER_BALL_BUY_PRICE, 0L));
         } else if (mb.buy() != MASTER_BALL_BUY_PRICE) {
             throw new IllegalStateException(
                     "配置错误：大师球购买价必须为 " + MASTER_BALL_BUY_PRICE + "，实际 " + mb.buy());
-        } else {
-            out.put(MASTER_BALL, new OverridePrice(MASTER_BALL_BUY_PRICE, 0L));
         }
+        // 否则 buy 已校验 == 固定值，sell 保持数据包原值（尊重作者配置，可设 0 关闭回收）
         // 保序发布（迭代顺序 = 收录顺序）
         return Collections.unmodifiableMap(out);
     }

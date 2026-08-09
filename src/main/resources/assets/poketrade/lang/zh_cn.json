@@ -39,6 +39,8 @@
   "poketrade.exchange.buy": "买价",
   "poketrade.exchange.buy.unavailable": "该物品仅可出售，不可买入",
   "poketrade.exchange.buy.disabled": "买入已停用",
+  "poketrade.exchange.buy.cart": "一键买入",
+  "poketrade.exchange.buy.sent": "买入请求已发送",
   "poketrade.exchange.sell": "卖价",
   "poketrade.exchange.sell.disabled": "出售已停用",
   "poketrade.exchange.sell.storage": "结算出售",

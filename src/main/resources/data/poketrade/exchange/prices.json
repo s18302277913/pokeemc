@@ -1,5 +1,5 @@
 {
   "items": {
-    "pixelmon:master_ball": { "buyPrice": 5000000, "sellPrice": 0 }
+    "pixelmon:master_ball": { "buyPrice": 5000000, "sellPrice": 5000000 }
   }
 }

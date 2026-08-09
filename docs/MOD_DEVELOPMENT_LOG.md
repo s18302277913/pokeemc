@@ -56,6 +56,27 @@
 
 ## 会话记录存档区
 
+### [2026-08-09 11:12] 会话 #4 — 三个功能 Bug 修复（大箱子兼容 / 购物车 UI / 转化桌回收价）
+
+### 🎯 本次需求
+玩家反馈三个功能 Bug，要求"严格按照 api 官方文档修复"：
+1. **Bug #1 大箱子兼容**：左侧存储面板无法调用 double chest 的全部格子（27-53 格几乎不可达）。
+2. **Bug #2 购物车 UI**：购物车收起态误现"买"按钮（删除）；"一键出售"下方缺"一键买入"（补上）。
+3. **Bug #3 转化桌回收价**：物品已在数据包定义价格，卖入转化桌仍提示"没有回收价"。
+
+完整验证链全绿：`compileJava/compileTestJava` → 定向单测（价格/UI/网络）→ `:test` 全量 58 测试类 → `runGameTestServer`（39/39 GameTest）→ `gradlew build --offline`。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-20（Bug #1 根因 = UI 可达性，非服务端链路）**：double chest 54-slot 服务端链路经代码审读 + 既有 GameTest 确认正确（`VanillaDoubleChestAdapter` canonicalize→primary half→`DoubleContainer` 54 槽 → `MinecraftSlotStore` → `StorageHandleImpl.snapshot()` 保序返回全部非空槽；claim/discovery/withdraw/deposit 均正确）。真正缺陷在客户端 UI 可达性：accordion 网格固定 **3 行可见**（`ACCORDION_GRID_ROWS=3`，21 槽），`PeStyle.scrollbar` 纯渲染不可点击，鼠标滚轮必须精确悬停在网格上——大箱子 4-8 行的槽位玩家根本够不到。修复：`ExchangeScreen.java` 网格行数按槽位数量**自适应**（`MAX_ACCORDION_ROWS=7`，210px < 底部按钮 y=226，单箱 4 行/双箱 7 行/8 行时末排滚动），并把滚动条改为**可点击跳页**（`handleLeftClick()` 按 y 位置命中跳页）。[CHANGED] `ExchangeScreen.java`。
+- **ADR-21（Bug #2 购物车 UI）**：移除收起态误渲染的"买"按钮（`cartSellCollapsed` 相关渲染分支 [REMOVED]）；在"一键出售"正下方新增"一键买入"按钮（`ExchangeUiModel.Layout.cartBuy` control + `ExchangeScreen.buyCart()` 逻辑 + zh_cn/en_us 文案 `buy.cart`/`buy.sent`）。[CHANGED] `ExchangeUiModel.java`/`ExchangeScreen.java`/`zh_cn.json`/`en_us.json`。
+- **ADR-22（Bug #3 根因 = 覆盖价强制归零）**：`PriceOverrides.parse` 原先**无条件**把 `pixelmon:master_ball` 的 sell 强制归 0（"只买不卖"硬规则），导致玩家数据包即便定义了 sellPrice 也会被覆盖；`ExchangePriceService` 按官方×10 定价逻辑对 sell=0 物品判定无回收价，客户端 `sell.no_price` 误报。修复：**卖出价尊重数据包 sellPrice**（默认 0 = 不回收），仅保留 buy==5000000 硬校验（防配置破坏经济），缺失时注入默认 `(5000000, 0)`；同步把内置 `prices.json` 的 master_ball sellPrice 0 → 5000000（与 PKM 值一致，默认可回收），并新增单测 `masterBallSellRespectedWhenConfigured`。
+  - **[BREAKING CHANGES]** master_ball 回收行为：由"只买不卖"变为"尊重数据包 sellPrice"。服务器若沿用旧版 `prices.json`（sell=0），行为不变（仍不可回收）；如需默认可回收需同步更新内置数据包。`buyPrice` 硬校验仍为 5000000，配置不等于该值会抛 `IllegalStateException`（不静默回退）。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [x] 三个 Bug 全部修复并通过全量回归（`compileJava/compileTestJava` → `:test` → `runGameTestServer` 39/39 → `build`）。
+- [ ] **已记录未修复**：double **trapped chest** 仅暴露 27 槽——`StorageProtectionEvents.typeIdFor` 对 `TrappedChestBlock` 返回 `vanilla_trapped_chest`，无 double-chest variant（普通 chest 有 `vanilla_double_chest`）。修复方向：`ChestPairSupport` 检测成对 trapped chest 时映射到 double variant（或新增 `vanilla_double_trapped_chest`）。暂缓，待用户确认是否纳入本次范围。
+- [ ] **行为变更提示**：[BREAKING CHANGES] master_ball sell 语义变更已记录于 ADR-22；旧存档/数据包无需迁移（尊重 sell=0 即保持原行为）。
+
 ### [2026-08-09 10:29] 会话 #3 — 官方 API 合规审计（Batch 4）：弃用/待删 API 清零（commit `3209932`）
 
 ### 🎯 本次需求

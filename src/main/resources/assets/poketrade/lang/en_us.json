@@ -39,6 +39,8 @@
   "poketrade.exchange.buy": "Buy",
   "poketrade.exchange.buy.unavailable": "This item can only be sold, not bought",
   "poketrade.exchange.buy.disabled": "Buying is disabled",
+  "poketrade.exchange.buy.cart": "Buy Cart",
+  "poketrade.exchange.buy.sent": "Buy order sent",
   "poketrade.exchange.sell": "Sell",
   "poketrade.exchange.sell.disabled": "Selling is disabled",
   "poketrade.exchange.sell.storage": "Sell Selected",
