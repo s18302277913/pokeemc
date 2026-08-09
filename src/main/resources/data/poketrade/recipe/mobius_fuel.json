@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    { "item": "poketrade:alchemical_coal" },
+    { "item": "poketrade:alchemical_coal" },
+    { "item": "poketrade:alchemical_coal" },
+    { "item": "poketrade:alchemical_coal" }
+  ],
+  "result": {
+    "count": 1,
+    "id": "poketrade:mobius_fuel"
+  }
+}

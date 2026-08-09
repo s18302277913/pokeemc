@@ -1,0 +1,72 @@
+<h2>宝可梦交易系统 · 玩家远程交易 V5</h2>
+<p class="subtitle">物品、PKM 与宝可梦统一交易；双方锁定 3 秒后最终确认，服务端原子提交。</p>
+
+<div class="mockup">
+  <div class="mockup-header">交易会话 · 你 ↔ 训练家小明</div>
+  <div class="mockup-body" style="background:#211d29;padding:25px;font-family:monospace;color:#292929;overflow:auto">
+    <div style="width:900px;margin:auto;background:#c5c5c5;border:3px solid #222;padding:10px;box-shadow:inset 2px 2px #eee,inset -2px -2px #555">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><b>玩家远程交易</b><span style="font-size:11px;color:#555">会话已加密校验 · 交易编号 #A21F</span><button>取消交易</button></div>
+      <div style="display:grid;grid-template-columns:1fr 54px 1fr;gap:8px">
+        <div style="background:#aaa;border:2px inset #ddd;padding:8px">
+          <div style="display:flex;justify-content:space-between"><b>你的报价</b><span style="color:#21611e">已锁定 ✓</span></div>
+          <div style="font-size:11px;color:#555;margin:4px 0">物品 · 18 格</div>
+          <div style="height:68px;background:#8f8f8f;border:2px inset #ddd;padding:5px;display:grid;grid-template-columns:repeat(9,1fr);gap:3px;font-size:18px"><span>⚫</span><span>🔵</span><span>🍬</span><span>💎</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span></div>
+          <div style="display:flex;gap:5px;margin:7px 0"><label>附加 PKM</label><div style="flex:1;background:#999;border:2px inset #ddd;padding:4px">250,000</div><button>最大</button></div>
+          <div style="font-size:11px;color:#555;margin-bottom:4px">宝可梦 · 队伍与 PC</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px">
+            <div style="background:#999;border:2px inset #ddd;padding:5px"><b>喷火龙 Lv.72</b><br><small>闪光 · 固执 · OT: 你</small></div>
+            <div style="background:#999;border:2px inset #ddd;padding:5px"><b>伊布 Lv.28</b><br><small>胆小 · PC 盒子 3</small></div>
+            <div style="background:#999;border:2px inset #ddd;padding:5px;color:#666">+ 添加宝可梦</div>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:center;font-size:28px">⇄</div>
+
+        <div style="background:#aaa;border:2px inset #ddd;padding:8px">
+          <div style="display:flex;justify-content:space-between"><b>训练家小明的报价</b><span style="color:#7b5b12">锁定中 2.1s</span></div>
+          <div style="font-size:11px;color:#555;margin:4px 0">物品 · 18 格</div>
+          <div style="height:68px;background:#8f8f8f;border:2px inset #ddd;padding:5px;display:grid;grid-template-columns:repeat(9,1fr);gap:3px;font-size:18px"><span>🟣</span><span>🧪</span><span>💊</span><span>🔶</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span></div>
+          <div style="display:flex;gap:5px;margin:7px 0"><label>附加 PKM</label><div style="flex:1;background:#999;border:2px inset #ddd;padding:4px">600,000</div></div>
+          <div style="font-size:11px;color:#555;margin-bottom:4px">宝可梦</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px">
+            <div style="background:#999;border:2px inset #ddd;padding:5px;outline:2px solid #d39b42"><b>耿鬼 Lv.65</b><br><small>胆小 · 5V · 交换后进化：否</small></div>
+            <div style="background:#999;border:2px inset #ddd;padding:5px;color:#666">空</div><div style="background:#999;border:2px inset #ddd;padding:5px;color:#666">空</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:8px;border:2px inset #ddd;background:#aaa;padding:8px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><b>物品接收去向</b><div style="display:flex;gap:4px;margin-top:4px"><button>自动分配 ▼</button><button>背包</button><button>末影箱</button><button>选择箱子...</button></div><small style="color:#555">当前：优先附近的箱子 1 → 背包 → 领取缓存</small></div>
+          <div><b>宝可梦接收去向</b><div style="display:flex;gap:4px;margin-top:4px"><button>队伍优先 ▼</button><button>PC 盒子 5</button></div><small style="color:#555">空间不足时禁止最终确认，不会覆盖已有宝可梦。</small></div>
+        </div>
+      </div>
+
+      <div style="margin-top:8px;background:#9a8e76;border:2px inset #ddd;padding:7px;display:flex;justify-content:space-between"><span>任何一方修改物品、PKM、宝可梦或接收去向都会取消双方确认。</span><b>安全锁定：2.1 / 3.0 秒</b></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><span style="font-size:11px;color:#555">双方资产已由服务端预校验 · 最终提交时将再次校验</span><span><button>解锁修改</button> <button disabled>等待对方锁定...</button> <button style="background:#d7c77a">最终确认</button></span></div>
+    </div>
+  </div>
+</div>
+
+<div class="cards" style="margin-top:20px">
+  <div class="card"><div class="card-body"><h3>邀请与隐私</h3><p>附近玩家面板和在线玩家搜索；支持拒收陌生邀请、黑名单、邀请冷却和每人单会话限制。</p></div></div>
+  <div class="card"><div class="card-body"><h3>宝可梦安全</h3><p>加入交易后锁定队伍/PC 记录；展示等级、闪光、性格、特性、个体、努力、携带物和原训练家；明确交换进化结果。</p></div></div>
+  <div class="card"><div class="card-body"><h3>原子提交</h3><p>物品、PKM 和宝可梦作为一个事务；任一资产变化、空间不足或断线都使整笔交易取消，不会部分成功。</p></div></div>
+  <div class="card"><div class="card-body"><h3>性能</h3><p>PC 按盒分页、宝可梦摘要按需加载、只同步变化槽、交易锁超时释放、日志异步批量落盘。</p></div></div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>实施顺序</h3>
+  <ol>
+    <li><b>ID 与经济迁移：</b>pokeemc → poketrade 自动重映射；商店双价与 10 倍经济。</li>
+    <li><b>中央交易所与批量购物车：</b>名称、布局、排序、指针、批量买卖和安全确认。</li>
+    <li><b>附近仓储与共享：</b>归属、真实拖放、滚动箱子、权限、模板、保护和审计。</li>
+    <li><b>玩家远程交易：</b>会话、邀请、物品与 PKM，再接入队伍/PC 宝可梦和原子提交。</li>
+    <li><b>兼容与优化：</b>整理模组适配、缓存、限流、配置与多人压力测试。</li>
+  </ol>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="approve-v5-implementation" onclick="toggleSelect(this)"><div class="letter">✓</div><div class="content"><h3>批准方案并逐步实现</h3><p>从 ID 迁移和经济双价开始，分阶段构建与测试。</p></div></div>
+  <div class="option" data-choice="revise-v5-trade" onclick="toggleSelect(this)"><div class="letter">↺</div><div class="content"><h3>继续调整玩家交易</h3><p>回到对话说明需要修改的交易流程或界面。</p></div></div>
+</div>

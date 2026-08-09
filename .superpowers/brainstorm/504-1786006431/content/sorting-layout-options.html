@@ -1,0 +1,43 @@
+<h2>宝可梦交易所：排序控件布局</h2>
+<p class="subtitle">目标：消除标题与搜索框重叠，并在 176px 宽的 Minecraft 容器内加入多种排序。</p>
+
+<div class="cards">
+  <div class="card" data-choice="compact-cycle" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:16px;background:#26212f">
+      <div style="width:300px;margin:auto;background:#bcbcbc;border:3px solid #393939;padding:9px;color:#2c2c2c;font-family:monospace;box-shadow:inset 2px 2px #eee,inset -2px -2px #666">
+        <div style="display:flex;justify-content:space-between;font-weight:bold;margin-bottom:8px"><span>宝可梦交易所</span><span style="color:#735b10">PKM 5,000,000</span></div>
+        <div style="display:flex;gap:5px;margin-bottom:7px"><div style="flex:1;background:#999;border:2px inset #ddd;padding:4px">搜索物品...</div><button style="width:88px">价格 ↓</button></div>
+        <div style="font-size:12px;margin-bottom:4px">悬停物品：大师球 · 5,000,000 PKM</div>
+        <div style="height:86px;background:#999;border:2px inset #ddd;display:grid;grid-template-columns:repeat(9,1fr);gap:3px;padding:5px"><span>🔴</span><span>🔵</span><span>⚪</span><span>🟡</span><span>🟢</span><span>🟣</span><span>🟠</span><span>⚫</span><span>🔘</span></div>
+      </div>
+    </div>
+    <div class="card-body"><h3>A · 单按钮循环（推荐）</h3><p>点击排序按钮依次切换：价格降序 → 价格升序 → 名称 → 模组。最省宽度，适合 Minecraft 小型容器。</p></div>
+  </div>
+
+  <div class="card" data-choice="two-controls" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:16px;background:#26212f">
+      <div style="width:300px;margin:auto;background:#bcbcbc;border:3px solid #393939;padding:9px;color:#2c2c2c;font-family:monospace">
+        <div style="display:flex;justify-content:space-between;font-weight:bold;margin-bottom:8px"><span>宝可梦交易所</span><span style="color:#735b10">PKM 5,000,000</span></div>
+        <div style="display:flex;gap:4px;margin-bottom:7px"><div style="flex:1;background:#999;border:2px inset #ddd;padding:4px">搜索...</div><button>价格</button><button>↓</button></div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span>大师球</span><span>5,000,000 PKM</span></div>
+        <div style="height:86px;background:#999;border:2px inset #ddd"></div>
+      </div>
+    </div>
+    <div class="card-body"><h3>B · 排序字段 + 方向</h3><p>一个按钮选择字段，另一个按钮独立切换升降序。状态清楚，但会压缩搜索框宽度。</p></div>
+  </div>
+
+  <div class="card" data-choice="toolbar" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:16px;background:#26212f">
+      <div style="width:300px;margin:auto;background:#bcbcbc;border:3px solid #393939;padding:9px;color:#2c2c2c;font-family:monospace">
+        <div style="display:flex;justify-content:space-between;font-weight:bold;margin-bottom:8px"><span>宝可梦交易所</span><span style="color:#735b10">PKM 5,000,000</span></div>
+        <div style="background:#999;border:2px inset #ddd;padding:4px;margin-bottom:5px">搜索物品...</div>
+        <div style="display:flex;gap:3px;margin-bottom:5px"><button>贵→便宜</button><button>便宜→贵</button><button>A-Z</button><button>模组</button></div>
+        <div style="font-size:12px;margin-bottom:4px">指针：大师球 · Pixelmon · 5,000,000 PKM</div>
+        <div style="height:67px;background:#999;border:2px inset #ddd"></div>
+      </div>
+    </div>
+    <div class="card-body"><h3>C · 完整工具栏</h3><p>所有排序方式直接可见，学习成本最低；需要新增一行，会进一步拉高 UI。</p></div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:18px">点击一个方案进行选择，然后回到对话告诉我是否需要调整。</p>

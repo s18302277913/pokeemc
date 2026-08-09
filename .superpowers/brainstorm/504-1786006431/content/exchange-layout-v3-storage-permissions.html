@@ -1,0 +1,110 @@
+<h2>宝可梦交易所 · 仓储与共享 V3</h2>
+<p class="subtitle">箱子相互隔离并纵向紧贴排列；支持真实拖放、箱内搜索、右键批量操作、在线玩家共享和权限模板。</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">左侧仓储面板 · 滚动箱子列表</div>
+    <div class="mockup-body" style="background:#211d29;padding:22px;font-family:monospace;color:#292929;min-height:580px">
+      <div style="width:390px;margin:auto;background:#bdbdbd;border:3px solid #222;padding:8px;box-shadow:inset 2px 2px #eee,inset -2px -2px #555">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-weight:bold;margin-bottom:6px"><span>附近仓储</span><span><button title="刷新">↻</button><button title="仓储与共享设置">⚙</button><button title="收起">◀</button></span></div>
+        <div style="display:flex;gap:3px;align-items:center;margin-bottom:5px"><span style="font-size:11px">范围</span><button style="background:#d7c77a">16</button><button>32</button><button>64</button><button style="flex:1">自定义...</button></div>
+        <div style="display:flex;gap:5px;margin-bottom:6px"><div style="flex:1;background:#999;border:2px inset #ddd;padding:4px;color:#555">搜索附近箱子中的物品...</div><button>全部类型 ↓</button></div>
+        <div style="font-size:11px;color:#555;margin-bottom:5px">发现 3 个可访问箱子 · 搜索结果 41 格</div>
+
+        <div style="height:430px;display:flex;gap:4px">
+          <div style="flex:1;overflow:hidden;border:1px solid #666;background:#a8a8a8">
+            <div style="background:#c8c8c8;border-bottom:2px solid #555;padding:5px">
+              <div style="display:flex;justify-content:space-between"><b>附近的箱子 1</b><span style="font-size:11px">普通双箱 · 54 格</span></div>
+              <div style="font-size:11px;color:#555">所有者：你 · 共享给 2 人 · 距离 5.4 格</div>
+            </div>
+            <div style="padding:6px;height:132px;background:#8e8e8e;display:grid;grid-template-columns:repeat(9,1fr);gap:3px;font-size:18px">
+              <span title="可直接拖入或取出">🪵</span><span>🪨</span><span>🥕</span><span>⚙️</span><span>🔴</span><span>💎</span><span>🌿</span><span>🧱</span><span>🟡</span>
+              <span>🍎</span><span>⚪</span><span>🟣</span><span>🔵</span><span>💊</span><span>🩹</span><span>🧪</span><span>🍬</span><span>📦</span>
+              <span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span>
+              <span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span>
+              <span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span>
+              <span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span>
+            </div>
+
+            <div style="background:#c8c8c8;border-top:2px solid #333;border-bottom:2px solid #555;padding:5px">
+              <div style="display:flex;justify-content:space-between"><b>附近的箱子 2</b><span style="font-size:11px">陷阱箱 · 27 格</span></div>
+              <div style="font-size:11px;color:#555">所有者：训练家小明 · 权限：查看 / 存入 / 取出</div>
+            </div>
+            <div style="padding:6px;height:66px;background:#8e8e8e;display:grid;grid-template-columns:repeat(9,1fr);gap:3px;font-size:18px">
+              <span>🔴</span><span>🔵</span><span>🟡</span><span>🧪</span><span>💊</span><span>🍇</span><span>🍒</span><span>·</span><span>·</span>
+              <span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span>
+              <span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span>
+            </div>
+
+            <div style="background:#c8c8c8;border-top:2px solid #333;border-bottom:2px solid #555;padding:5px">
+              <div style="display:flex;justify-content:space-between"><b>附近的箱子 3</b><span style="font-size:11px">末影箱 · 27 格</span></div>
+              <div style="font-size:11px;color:#555">所有者：你 · 私有库存，不可共享</div>
+            </div>
+            <div style="padding:6px;height:70px;background:#8e8e8e;display:grid;grid-template-columns:repeat(9,1fr);gap:3px;font-size:18px"><span>💎</span><span>⚫</span><span>🍬</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span></div>
+          </div>
+          <div style="width:14px;background:#777;border:2px inset #aaa;position:relative"><div style="position:absolute;top:65px;left:1px;width:8px;height:100px;background:#c5c5c5;border:1px outset white"></div></div>
+        </div>
+        <div style="font-size:11px;color:#555;margin-top:5px">拖放直接存取 · 右键打开批量操作 · 双箱按一个库存显示</div>
+      </div>
+
+      <div style="position:absolute;margin-left:250px;margin-top:-340px;width:205px;background:#d0d0d0;border:2px solid #222;padding:6px;box-shadow:3px 3px 0 #333">
+        <b>高级球 × 64</b><hr><div>出售 1 个</div><div>出售 1 组</div><div>出售全部同类</div><hr><div>加入批量购物车</div><div>移动到其他箱子...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">箱子共享设置 · 在线玩家与权限模板</div>
+    <div class="mockup-body" style="background:#211d29;padding:22px;font-family:monospace;color:#292929;min-height:580px">
+      <div style="width:470px;margin:auto;background:#c5c5c5;border:3px solid #222;padding:10px;box-shadow:inset 2px 2px #eee,inset -2px -2px #555">
+        <div style="display:flex;justify-content:space-between"><h3 style="margin:0">仓储共享设置</h3><button>×</button></div>
+        <div style="font-size:11px;color:#555;margin:4px 0 8px">当前箱子：附近的箱子 1 · 所有者：你</div>
+
+        <div style="display:flex;gap:5px;margin-bottom:8px"><label>权限模板：</label><button style="flex:1;text-align:left">团队仓库 ▼</button><button>应用</button><button>另存模板</button></div>
+        <div style="display:flex;gap:8px">
+          <div style="width:155px;border:2px inset #ddd;background:#999;padding:5px">
+            <b>在线玩家</b>
+            <div style="margin-top:5px;background:#d7c77a;padding:4px">训练家小明</div>
+            <div style="padding:4px">RedstoneFox</div>
+            <div style="padding:4px">小霞</div>
+            <div style="padding:4px;color:#666">阿强（已离线）</div>
+            <button style="width:100%;margin-top:8px">+ 添加选中玩家</button>
+          </div>
+          <div style="flex:1;border:2px inset #ddd;background:#aaa;padding:7px">
+            <div style="display:flex;justify-content:space-between"><b>训练家小明</b><button>移除共享</button></div>
+            <div style="font-size:11px;color:#555;margin:4px 0 8px">为此玩家设置“附近的箱子 1”权限</div>
+            <label style="display:block;margin:7px"><input type="checkbox" checked> 查看箱子和物品</label>
+            <label style="display:block;margin:7px"><input type="checkbox" checked> 存入物品</label>
+            <label style="display:block;margin:7px"><input type="checkbox" checked> 取出物品</label>
+            <label style="display:block;margin:7px"><input type="checkbox"> 出售箱内物品</label>
+            <div style="font-size:11px;color:#6f1e1e;margin-top:10px">共享玩家不能修改成员、权限模板或所有权。</div>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid #777;margin-top:9px;padding-top:8px">
+          <b>模板：团队仓库</b>
+          <div style="font-size:11px;color:#555;margin:4px 0">包含 3 位玩家，可应用到其他本人箱子。</div>
+          <div style="display:flex;gap:5px"><button>应用到当前箱子</button><button>选择多个箱子...</button><button>更新模板</button><button>删除模板</button></div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:10px"><button>取消</button><button style="background:#d7c77a">保存设置</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>交互规则</h3>
+  <ul>
+    <li>左侧每个箱子对应真实独立库存，玩家可以在背包与有权限的箱子之间直接拖放。</li>
+    <li>搜索结果只做高亮和过滤视图，不重排或合并真实槽位；清空搜索后恢复原槽位。</li>
+    <li>右键只对当前物品类型操作；出售前服务端重新检查箱子归属、共享权限、距离和实际数量。</li>
+    <li>箱子按“附近的箱子 1、2、3”编号，标题同时显示箱型、所有者和当前玩家权限。</li>
+    <li>权限模板保存玩家与四项权限，可应用到当前箱子或批量应用到多个本人箱子。</li>
+    <li>末影箱属于玩家个人容器，显示在列表中但不能共享。</li>
+  </ul>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="approve-v3-storage" onclick="toggleSelect(this)"><div class="letter">✓</div><div class="content"><h3>认可 V3 仓储设计</h3><p>继续完成整体设计与实施拆分。</p></div></div>
+  <div class="option" data-choice="revise-v3-storage" onclick="toggleSelect(this)"><div class="letter">↺</div><div class="content"><h3>需要调整</h3><p>回到对话说明箱子列表、搜索、右键菜单或权限弹窗要改哪里。</p></div></div>
+</div>

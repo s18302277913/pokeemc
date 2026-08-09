@@ -1,0 +1,88 @@
+<h2>宝可梦交易所 · UI 方案 V2</h2>
+<p class="subtitle">右侧改为多格批量购物车；左侧增加 16 / 32 / 64 格快捷范围和自定义范围弹窗。</p>
+
+<div class="mockup">
+  <div class="mockup-header">主界面 · 左右面板展开</div>
+  <div class="mockup-body" style="background:#211d29;padding:28px;overflow:auto">
+    <div style="display:flex;align-items:flex-start;justify-content:center;font-family:monospace;color:#292929;min-width:920px">
+      <div style="width:260px;background:#bdbdbd;border:3px solid #222;padding:8px;box-shadow:inset 2px 2px #eee,inset -2px -2px #555">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-weight:bold;margin-bottom:7px"><span>附近仓储</span><button>◀</button></div>
+        <div style="display:flex;gap:3px;align-items:center;margin-bottom:6px"><span style="font-size:11px">范围</span><button style="background:#d7c77a">16</button><button>32</button><button>64</button><button style="flex:1">自定义...</button></div>
+        <div style="font-size:11px;color:#555;margin-bottom:6px">扫描半径 16 格 · 仅显示本人放置</div>
+        <div style="display:flex;gap:4px;margin-bottom:6px"><button style="background:#d7c77a">普通箱 2</button><button>陷阱箱 1</button><button>末影箱</button></div>
+        <div style="background:#8f8f8f;border:2px inset #ddd;padding:5px;height:94px;display:grid;grid-template-columns:repeat(6,1fr);gap:3px;font-size:17px">
+          <span>🪵</span><span>🪨</span><span>🥕</span><span>⚙️</span><span>🔴</span><span>💎</span><span>🌿</span><span>🧱</span><span>🪵</span><span>🟡</span><span>🧪</span><span>📦</span><span>🍎</span><span>⚪</span><span>🟣</span><span>🔵</span><span>💊</span><span>🩹</span>
+        </div>
+        <div style="font-size:11px;margin:5px 0">已选：橡木原木 × 384</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px"><button>取出 1 组</button><button>存入同类</button><button style="grid-column:span 2;background:#d9b87a">出售已选</button><button style="grid-column:span 2;background:#d79279">一键出售可售物</button></div>
+      </div>
+
+      <button style="height:34px;margin-top:18px">◀</button>
+
+      <div style="width:310px;background:#c2c2c2;border:3px solid #222;padding:8px;box-shadow:inset 2px 2px #eee,inset -2px -2px #555">
+        <div style="display:flex;justify-content:space-between;font-weight:bold;margin-bottom:8px"><span>宝可梦交易所</span><span style="color:#705816">PKM 5,230,000</span></div>
+        <div style="display:flex;gap:5px;margin-bottom:6px"><div style="flex:1;background:#999;border:2px inset #ddd;padding:4px;color:#555">搜索物品...</div><button style="width:82px">类别 ↓</button></div>
+        <div style="display:flex;gap:3px;font-size:11px;margin-bottom:5px"><span style="background:#725d87;color:white;padding:2px 5px">精灵球</span><span style="padding:2px 5px">药品</span><span style="padding:2px 5px">树果</span><span style="padding:2px 5px">进化</span><span style="padding:2px 5px">原版</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px"><span>指针：大师球 · 精灵球</span><span style="color:#72510b">买 5,000,000 / 卖 1,625,000</span></div>
+        <div style="height:92px;background:#909090;border:2px inset #ddd;padding:5px;display:grid;grid-template-columns:repeat(9,1fr);gap:3px;font-size:17px">
+          <span style="outline:2px solid #ffdc62">⚫</span><span>🔴</span><span>🔵</span><span>🟡</span><span>🟢</span><span>🟣</span><span>🟠</span><span>⚪</span><span>🔘</span><span>🧪</span><span>💊</span><span>🩹</span><span>🍒</span><span>🍎</span><span>🍇</span><span>💎</span><span>🪨</span><span>⚙️</span>
+        </div>
+        <div style="font-size:11px;margin:5px 0;color:#555">排序：类别 → 子类 → 稀有度 → 名称</div>
+        <div style="display:flex;justify-content:space-between"><span>玩家物品栏</span><span style="font-size:11px;color:#666">Shift 点击加入购物车</span></div>
+        <div style="height:64px;background:#aaa;border:2px inset #ddd;margin-top:3px"></div>
+      </div>
+
+      <button style="height:34px;margin-top:18px">▶</button>
+
+      <div style="width:285px;background:#bdbdbd;border:3px solid #222;padding:8px;box-shadow:inset 2px 2px #eee,inset -2px -2px #555">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-weight:bold;margin-bottom:6px"><button>▶</button><span>批量购物车</span><span style="font-size:11px;color:#666">6 / 27 格</span></div>
+        <div style="font-size:11px;color:#555;margin-bottom:5px">样本槽只记录类型；滚轮调整单格数量</div>
+        <div style="background:#8f8f8f;border:2px inset #ddd;padding:5px;height:102px;display:grid;grid-template-columns:repeat(9,1fr);gap:3px;font-size:18px">
+          <span title="大师球 ×1" style="position:relative;outline:2px solid #ffdc62">⚫<small style="position:absolute;right:0;bottom:-5px;color:white;font-size:9px">1</small></span>
+          <span title="高级球 ×32" style="position:relative">🔵<small style="position:absolute;right:0;bottom:-5px;color:white;font-size:9px">32</small></span>
+          <span title="全满药 ×16" style="position:relative">🧪<small style="position:absolute;right:0;bottom:-5px;color:white;font-size:9px">16</small></span>
+          <span title="火之石 ×4" style="position:relative">🔶<small style="position:absolute;right:0;bottom:-5px;color:white;font-size:9px">4</small></span>
+          <span title="神奇糖果 ×64" style="position:relative">🍬<small style="position:absolute;right:0;bottom:-5px;color:white;font-size:9px">64</small></span>
+          <span title="活力块 ×8" style="position:relative">💊<small style="position:absolute;right:0;bottom:-5px;color:white;font-size:9px">8</small></span>
+          <span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span><span>·</span>
+        </div>
+        <div style="display:flex;gap:4px;margin-top:6px"><button>选中格：1</button><button>半组</button><button>一组</button><button>清空格</button></div>
+        <div style="display:flex;gap:4px;margin-top:5px"><div style="flex:1;background:#999;border:2px inset #ddd;padding:4px">自定义 12</div><button>应用到选中</button></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;margin:7px 0 4px"><span>6 种 · 共 125 件</span><b style="color:#76560b">合计 5,486,400 PKM</b></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px"><button>清空购物车</button><button style="background:#d9b87a">购买全部</button></div>
+        <div style="border-top:1px solid #777;margin-top:7px;padding-top:6px"><button style="width:100%;background:#d79279">一键出售背包可售物</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="split" style="margin-top:20px">
+  <div class="mockup">
+    <div class="mockup-header">自定义范围弹窗</div>
+    <div class="mockup-body" style="background:#211d29;padding:40px;font-family:monospace;color:#292929">
+      <div style="width:300px;margin:auto;background:#c2c2c2;border:3px solid #222;padding:12px;box-shadow:inset 2px 2px #eee,inset -2px -2px #555">
+        <h3 style="margin:0 0 8px">自定义扫描范围</h3>
+        <p style="font-size:12px;color:#555">输入以交易所为中心的扫描半径：</p>
+        <div style="background:#999;border:2px inset #ddd;padding:7px;margin:9px 0">96</div>
+        <div style="font-size:11px;color:#666;margin-bottom:9px">将扫描半径 96 格内属于你的箱子。</div>
+        <div style="display:flex;justify-content:flex-end;gap:6px"><button>取消</button><button style="background:#d7c77a">确定</button></div>
+      </div>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">输入校验状态</div>
+    <div class="mockup-body" style="background:#211d29;padding:40px;font-family:monospace;color:#292929">
+      <div style="width:300px;margin:auto;background:#c2c2c2;border:3px solid #222;padding:12px">
+        <h3 style="margin:0 0 8px">自定义扫描范围</h3>
+        <div style="background:#9b8585;border:2px inset #ddd;padding:7px;margin:9px 0;color:#7b1111">999999</div>
+        <div style="font-size:11px;color:#9b1919;margin-bottom:9px">范围过大，请输入允许范围内的整数。</div>
+        <div style="display:flex;justify-content:flex-end;gap:6px"><button>取消</button><button disabled>确定</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="options" style="margin-top:18px">
+  <div class="option" data-choice="approve-v2" onclick="toggleSelect(this)"><div class="letter">✓</div><div class="content"><h3>认可 V2 布局</h3><p>继续确定自定义扫描范围的最大值与性能规则。</p></div></div>
+  <div class="option" data-choice="revise-v2" onclick="toggleSelect(this)"><div class="letter">↺</div><div class="content"><h3>还需调整</h3><p>回到对话说明需要修改的部分。</p></div></div>
+</div>

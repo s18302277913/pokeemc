@@ -1,0 +1,20 @@
+pluginManagement {
+    repositories {
+        // Maven Central first: most deps (incl. j2objc-annotations) are mirrored there,
+        // avoiding Connection reset issues with maven.neoforged.net.
+        mavenCentral()
+        maven {
+            name = 'NeoForged'
+            url = 'https://maven.neoforged.net/releases'
+        }
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '0.8.0'
+}
+
+rootProject.name = 'pokeemc'
+
+include 'poketrade-api', 'poketrade-api-testkit', 'poketrade-api-example'

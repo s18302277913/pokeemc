@@ -1,0 +1,22 @@
+plugins {
+    id 'java-library'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    withSourcesJar()
+}
+
+dependencies {
+    api project(':poketrade-api')
+    api platform('org.junit:junit-bom:5.11.4')
+    api 'org.junit.jupiter:junit-jupiter-api'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine'
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    jvmArgs '-Dfile.encoding=UTF-8'
+}

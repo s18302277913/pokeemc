@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    { "item": "poketrade:mobius_fuel" },
+    { "item": "poketrade:mobius_fuel" },
+    { "item": "poketrade:mobius_fuel" },
+    { "item": "poketrade:mobius_fuel" }
+  ],
+  "result": {
+    "count": 1,
+    "id": "poketrade:aeternalis_fuel"
+  }
+}

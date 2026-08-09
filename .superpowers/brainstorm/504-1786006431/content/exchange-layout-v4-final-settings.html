@@ -1,0 +1,102 @@
+<h2>宝可梦交易所 · 最终设计 V4</h2>
+<p class="subtitle">补全防误售、仓储增强、共享审计、管理性能与箱子破坏保护。</p>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-image" style="background:#211d29;padding:22px;font-family:monospace;color:#292929">
+      <div style="width:370px;margin:auto;background:#c5c5c5;border:3px solid #222;padding:10px">
+        <div style="display:flex;justify-content:space-between"><b>仓储设置</b><button>×</button></div>
+        <div style="margin-top:8px;border:2px inset #ddd;background:#aaa;padding:7px">
+          <b>扫描与性能</b>
+          <label style="display:block;margin:6px"><input type="checkbox" checked> 只扫描已加载区块</label>
+          <label style="display:block;margin:6px">扫描半径：<button>16</button> <button>32</button> <button>64</button> <button>自定义 96</button></label>
+          <div style="font-size:11px;color:#555">服务器允许最大值：128 格 · 分批扫描</div>
+        </div>
+        <div style="margin-top:7px;border:2px inset #ddd;background:#aaa;padding:7px">
+          <b>箱子保护</b>
+          <label style="display:block;margin:6px"><input type="checkbox" checked> 启用箱子破坏保护</label>
+          <label style="display:block;margin:6px"><input type="checkbox" checked disabled> 阻止爆炸破坏</label>
+          <label style="display:block;margin:6px"><input type="checkbox" checked disabled> 阻止活塞和自动化搬运</label>
+          <div style="font-size:11px;color:#6d2020">手动破坏由“允许破坏”权限控制。</div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:5px;margin-top:8px"><button>取消</button><button style="background:#d7c77a">保存</button></div>
+      </div>
+    </div>
+    <div class="card-body"><h3>设置与性能</h3><p>默认最大扫描半径 128 格，管理员可修改；扫描任务分批执行且不加载新区块。</p></div>
+  </div>
+
+  <div class="card">
+    <div class="card-image" style="background:#211d29;padding:22px;font-family:monospace;color:#292929">
+      <div style="width:390px;margin:auto;background:#c5c5c5;border:3px solid #222;padding:10px">
+        <div style="display:flex;justify-content:space-between"><b>箱子权限 · 附近的箱子 1</b><button>×</button></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <div style="width:120px;background:#999;border:2px inset #ddd;padding:5px"><b>共享玩家</b><div style="background:#d7c77a;padding:4px;margin-top:4px">训练家小明</div><div style="padding:4px">小霞</div></div>
+          <div style="flex:1;background:#aaa;border:2px inset #ddd;padding:6px">
+            <b>训练家小明</b>
+            <label style="display:block;margin:5px"><input type="checkbox" checked> 查看</label>
+            <label style="display:block;margin:5px"><input type="checkbox" checked> 存入</label>
+            <label style="display:block;margin:5px"><input type="checkbox" checked> 取出</label>
+            <label style="display:block;margin:5px"><input type="checkbox"> 出售</label>
+            <label style="display:block;margin:5px"><input type="checkbox"> 允许破坏</label>
+          </div>
+        </div>
+        <div style="margin-top:7px">模板：<button>团队仓库 ▼</button> <button>应用到多个箱子</button></div>
+      </div>
+    </div>
+    <div class="card-body"><h3>共享与破坏权限</h3><p>每箱独立授权，并可用模板批量套用。爆炸与搬运保护不受玩家权限影响。</p></div>
+  </div>
+
+  <div class="card">
+    <div class="card-image" style="background:#211d29;padding:22px;font-family:monospace;color:#292929">
+      <div style="width:410px;margin:auto;background:#c5c5c5;border:3px solid #222;padding:10px">
+        <div style="display:flex;justify-content:space-between"><b>确认批量出售</b><button>×</button></div>
+        <div style="font-size:11px;color:#555;margin:5px 0">来源：背包 + 附近的箱子 1 · 共 12 种 386 件</div>
+        <div style="height:135px;background:#999;border:2px inset #ddd;padding:6px;overflow:hidden">
+          <div style="display:flex;justify-content:space-between"><span>橡木原木 × 192</span><span>卖出 3,840 PKM</span></div>
+          <div style="display:flex;justify-content:space-between"><span>圆石 × 128</span><span>卖出 1,280 PKM</span></div>
+          <div style="display:flex;justify-content:space-between;color:#8b1d1d"><span>高级球 × 64 ⚠ 贵重</span><span>卖出 20,800 PKM</span></div>
+          <div style="display:flex;justify-content:space-between;color:#666"><span>大师球 × 1 🔒 已锁定</span><span>跳过</span></div>
+          <div style="display:flex;justify-content:space-between"><span>其他 8 种...</span><span>卖出 6,250 PKM</span></div>
+        </div>
+        <label style="display:block;margin:7px 0"><input type="checkbox"> 本次包含贵重物品，确认出售</label>
+        <div style="display:flex;justify-content:space-between"><b>预计收入：32,170 PKM</b><span><button>取消</button> <button disabled>确认出售</button></span></div>
+      </div>
+    </div>
+    <div class="card-body"><h3>防误售确认</h3><p>锁定物品自动跳过，贵重物品强制确认；出售清单显示来源、数量和预计收入。</p></div>
+  </div>
+
+  <div class="card">
+    <div class="card-image" style="background:#211d29;padding:22px;font-family:monospace;color:#292929">
+      <div style="width:420px;margin:auto;background:#c5c5c5;border:3px solid #222;padding:10px">
+        <div style="display:flex;justify-content:space-between"><b>箱子操作日志</b><span><button>筛选 ▼</button><button>×</button></span></div>
+        <div style="margin-top:7px;background:#999;border:2px inset #ddd;padding:6px">
+          <div>16:28 训练家小明 取出 高级球 ×32</div>
+          <div>16:25 你 存入 神奇糖果 ×12</div>
+          <div>16:21 小霞 出售 圆石 ×128，收入 1,280</div>
+          <div>16:12 你 将“团队仓库”模板应用到箱子</div>
+          <div>15:58 RedstoneFox 尝试破坏箱子（已阻止）</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:7px;font-size:11px"><span>保留最近 500 条 · 服务端记录</span><button>导出日志</button></div>
+      </div>
+    </div>
+    <div class="card-body"><h3>共享审计</h3><p>记录存入、取出、出售、授权、破坏尝试；日志不能由共享玩家删除。</p></div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>首版范围总结</h3>
+  <ul>
+    <li><b>中央：</b>宝可梦交易所、双价显示、10 倍通胀、类别聚合排序、搜索和指针信息。</li>
+    <li><b>右侧：</b>27 格批量购物车，多种物品分别设置数量，一次性服务端校验并购买。</li>
+    <li><b>左侧：</b>独立箱子滚动列表、真实槽位拖放、搜索、右键出售/移动、箱子重命名与收藏排序。</li>
+    <li><b>共享：</b>箱主、在线/离线授权、查看/存入/取出/出售/允许破坏五级权限、权限模板。</li>
+    <li><b>保护：</b>物品锁定、贵重确认、出售黑白名单、箱子防爆炸/活塞/自动化搬运。</li>
+    <li><b>性能：</b>默认最大 128 格、服务端可配置、仅已加载区块、分批扫描和位置缓存。</li>
+    <li><b>审计：</b>箱子操作日志、异常交易频率检测、管理员禁止交易列表。</li>
+  </ul>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="approve-final-v4" onclick="toggleSelect(this)"><div class="letter">✓</div><div class="content"><h3>批准最终设计</h3><p>按此范围编写实施计划。</p></div></div>
+  <div class="option" data-choice="revise-final-v4" onclick="toggleSelect(this)"><div class="letter">↺</div><div class="content"><h3>继续调整</h3><p>回到对话说明需要修改的规则或界面。</p></div></div>
+</div>

@@ -1,0 +1,27 @@
+# Gradle
+.gradle/
+build/
+*/build/
+
+# 运行时产物（世界存档/日志/崩溃报告，一律不入库）
+run/
+run-gametest/
+run-client.log
+runclient-log.txt
+logs/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 大型第三方 jar（pixelmon.jar 等由外部管理，不入库）
+*.jar
+
+# 临时
+*.tmp
+*~

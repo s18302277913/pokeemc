@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "poketrade:block/transmutation_table"
+    }
+  }
+}

@@ -1,0 +1,68 @@
+<h2>宝可梦交易所 · 完整 UI 方案</h2>
+<p class="subtitle">中央交易、左侧仓储、右侧批量交易。左右面板可独立收起，样本槽只记录物品类型，不消耗样本。</p>
+
+<div class="mockup">
+  <div class="mockup-header">展开状态 · 约 470×250 游戏像素</div>
+  <div class="mockup-body" style="background:#211d29;padding:28px;overflow:auto">
+    <div style="display:flex;align-items:flex-start;justify-content:center;font-family:monospace;color:#292929;min-width:850px">
+      <div style="width:235px;background:#bdbdbd;border:3px solid #222;padding:8px;box-shadow:inset 2px 2px #eee,inset -2px -2px #555">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-weight:bold;margin-bottom:7px"><span>附近仓储</span><button title="收起左侧面板">◀</button></div>
+        <div style="display:flex;gap:4px;margin-bottom:6px"><button style="background:#d7c77a">普通箱 2</button><button>陷阱箱 1</button><button>末影箱</button></div>
+        <div style="font-size:11px;color:#555;margin-bottom:5px">仅显示本人放置 · 范围 16 格</div>
+        <div style="background:#8f8f8f;border:2px inset #ddd;padding:5px;height:92px;display:grid;grid-template-columns:repeat(6,1fr);gap:3px">
+          <span>🪵</span><span>🪨</span><span>🥕</span><span>⚙️</span><span>🔴</span><span>💎</span><span>🌿</span><span>🧱</span><span>🪵</span><span>🟡</span><span>🧪</span><span>📦</span>
+        </div>
+        <div style="font-size:11px;margin:5px 0">已选：橡木原木 × 384</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px"><button>取出 1 组</button><button>存入同类</button><button style="grid-column:span 2;background:#d9b87a">出售已选</button><button style="grid-column:span 2;background:#d79279">一键出售可售物</button></div>
+      </div>
+
+      <button style="height:34px;margin-top:18px" title="收起左侧仓储">◀</button>
+
+      <div style="width:310px;background:#c2c2c2;border:3px solid #222;padding:8px;box-shadow:inset 2px 2px #eee,inset -2px -2px #555">
+        <div style="display:flex;justify-content:space-between;font-weight:bold;margin-bottom:8px"><span>宝可梦交易所</span><span style="color:#705816">PKM 5,230,000</span></div>
+        <div style="display:flex;gap:5px;margin-bottom:6px"><div style="flex:1;background:#999;border:2px inset #ddd;padding:4px;color:#555">搜索物品...</div><button style="width:82px">类别 ↓</button></div>
+        <div style="display:flex;gap:3px;font-size:11px;margin-bottom:5px"><span style="background:#725d87;color:white;padding:2px 5px">精灵球</span><span style="padding:2px 5px">药品</span><span style="padding:2px 5px">树果</span><span style="padding:2px 5px">进化</span><span style="padding:2px 5px">原版</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px"><span>指针：大师球 · 精灵球</span><span style="color:#72510b">买 5,000,000 / 卖 1,625,000</span></div>
+        <div style="height:92px;background:#909090;border:2px inset #ddd;padding:5px;display:grid;grid-template-columns:repeat(9,1fr);gap:3px;font-size:17px">
+          <span style="outline:2px solid #ffdc62">⚫</span><span>🔴</span><span>🔵</span><span>🟡</span><span>🟢</span><span>🟣</span><span>🟠</span><span>⚪</span><span>🔘</span>
+          <span>🧪</span><span>💊</span><span>🩹</span><span>🍒</span><span>🍎</span><span>🍇</span><span>💎</span><span>🪨</span><span>⚙️</span>
+        </div>
+        <div style="font-size:11px;margin:5px 0;color:#555">排序：类别 → 子类 → 稀有度 → 名称</div>
+        <div style="display:flex;justify-content:space-between"><span>玩家物品栏</span><span style="font-size:11px;color:#666">Shift 点击加入样本</span></div>
+        <div style="height:64px;background:#aaa;border:2px inset #ddd;margin-top:3px"></div>
+      </div>
+
+      <button style="height:34px;margin-top:18px" title="收起右侧交易栏">▶</button>
+
+      <div style="width:235px;background:#bdbdbd;border:3px solid #222;padding:8px;box-shadow:inset 2px 2px #eee,inset -2px -2px #555">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-weight:bold;margin-bottom:7px"><button title="收起右侧面板">▶</button><span>批量交易</span></div>
+        <div style="font-size:11px;color:#555;margin-bottom:4px">样本槽（放入后立即返还原物品）</div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:7px"><div style="width:34px;height:34px;background:#8f8f8f;border:2px inset #ddd;display:flex;align-items:center;justify-content:center;font-size:21px">⚫</div><div><b>大师球</b><br><span style="font-size:11px">库存 0 · 可买 1</span></div></div>
+        <div style="display:flex;gap:4px;margin-bottom:5px"><button>买 1</button><button>买半组</button><button>买 1 组</button></div>
+        <div style="display:flex;gap:4px;margin-bottom:7px"><div style="flex:1;background:#999;border:2px inset #ddd;padding:4px">数量 12</div><button>购买</button></div>
+        <div style="border-top:1px solid #777;padding-top:7px"><div style="display:flex;gap:4px;margin-bottom:5px"><button>卖 1</button><button>卖 1 组</button><button>卖全部</button></div><button style="width:100%;background:#d9b87a">一键出售背包可售物</button></div>
+        <div style="font-size:11px;color:#666;margin-top:6px">预计：支出 5,000,000 PKM</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px">
+  <h3>收起状态</h3>
+  <p class="subtitle">左右面板收起后只保留窄标签，不遮挡中央交易区。</p>
+  <div style="display:flex;align-items:center;justify-content:center;gap:0;background:#211d29;padding:22px;font-family:monospace">
+    <button style="height:80px;writing-mode:vertical-rl">仓储 3 ▶</button>
+    <div style="width:310px;height:150px;background:#c2c2c2;border:3px solid #222;color:#292929;padding:8px"><b>宝可梦交易所</b><div style="margin-top:10px;background:#999;border:2px inset #ddd;padding:5px">搜索物品...　　类别 ↓</div><div style="margin-top:8px;height:70px;background:#909090;border:2px inset #ddd"></div></div>
+    <button style="height:80px;writing-mode:vertical-rl">◀ 批量交易</button>
+  </div>
+</div>
+
+<div class="pros-cons" style="margin-top:20px">
+  <div class="pros"><h4>方案优势</h4><ul><li>样本不消耗，实际买卖由服务端从钱包或背包执行</li><li>主列表按类别连续排列，不再把同类物品打散</li><li>箱子归属和批量出售均做服务端验证</li><li>双价显示清晰，避免误以为买卖同价</li></ul></div>
+  <div class="cons"><h4>需要注意</h4><ul><li>展开后较宽，适合 1280px 以上窗口</li><li>一键出售必须有确认或白名单，避免误售稀有物品</li><li>双箱两半必须归属一致</li><li>整理模组适配需单独确认目标模组名称与版本</li></ul></div>
+</div>
+
+<div class="options" style="margin-top:18px">
+  <div class="option" data-choice="approve-full-layout" onclick="toggleSelect(this)"><div class="letter">✓</div><div class="content"><h3>认可此布局</h3><p>继续确认交互细节与安全规则。</p></div></div>
+  <div class="option" data-choice="revise-full-layout" onclick="toggleSelect(this)"><div class="letter">↺</div><div class="content"><h3>需要调整</h3><p>回到对话说明要调整的位置。</p></div></div>
+</div>

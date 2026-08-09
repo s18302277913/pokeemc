@@ -1,0 +1,32 @@
+plugins {
+    id 'java-library'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    withSourcesJar()
+}
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    jvmArgs '-Dfile.encoding=UTF-8'
+}
+
+tasks.named('javadoc', Javadoc) {
+    // 公共 API 参考：doclint 关闭（部分中文文档含 markdown 风格符号）
+    // gradle.properties 强制 Gradle 以 GBK 写 javadoc.options（中文路径 + sun.jnu.encoding=GBK），
+    // 因此 javadoc 进程必须用 GBK 读参数文件；源码本身为 UTF-8，经 -encoding 显式指定。
+    options.jFlags('-Dfile.encoding=GBK')
+    options.encoding = 'UTF-8'
+    options.docEncoding = 'UTF-8'
+    options.charSet = 'UTF-8'
+    options.links('https://docs.oracle.com/en/java/javase/21/docs/api/')
+    options.addBooleanOption('Xdoclint:none', true)
+}

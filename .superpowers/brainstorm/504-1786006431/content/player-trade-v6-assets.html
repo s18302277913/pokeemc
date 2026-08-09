@@ -1,0 +1,76 @@
+<h2>宝可梦交易系统 · 玩家交易 V6</h2>
+<p class="subtitle">新增双方资产概览、可选公开范围和服务端交易能力检查。</p>
+
+<div class="mockup">
+  <div class="mockup-header">交易会话 · 资产与报价状态</div>
+  <div class="mockup-body" style="background:#211d29;padding:24px;font-family:monospace;color:#292929;overflow:auto">
+    <div style="width:930px;margin:auto;background:#c5c5c5;border:3px solid #222;padding:10px">
+      <div style="display:flex;justify-content:space-between"><b>玩家远程交易</b><span style="font-size:11px;color:#555">你 ↔ 训练家小明 · #A21F</span><button>取消交易</button></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px">
+        <div style="background:#aaa;border:2px inset #ddd;padding:7px">
+          <div style="display:flex;justify-content:space-between"><b>你的资产概览</b><button>公开设置 ⚙</button></div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:6px">
+            <div style="background:#999;padding:5px"><small>钱包余额</small><br><b>5,230,000 PKM</b></div>
+            <div style="background:#999;padding:5px"><small>背包空槽</small><br><b>12 / 36</b></div>
+            <div style="background:#999;padding:5px"><small>PC 空位</small><br><b>143</b></div>
+            <div style="background:#999;padding:5px"><small>接收箱空间</small><br><b>37 格</b></div>
+          </div>
+          <div style="font-size:11px;color:#555;margin-top:5px">已公开：钱包余额、背包空间、队伍摘要</div>
+        </div>
+        <div style="background:#aaa;border:2px inset #ddd;padding:7px">
+          <div style="display:flex;justify-content:space-between"><b>训练家小明的资产概览</b><span style="font-size:11px">由对方控制公开范围</span></div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-top:6px">
+            <div style="background:#999;padding:5px"><small>钱包余额</small><br><b>未公开</b></div>
+            <div style="background:#999;padding:5px"><small>背包空槽</small><br><b>8 / 36</b></div>
+            <div style="background:#999;padding:5px"><small>PC 空位</small><br><b>未公开</b></div>
+            <div style="background:#999;padding:5px"><small>指定箱空间</small><br><b>22 格</b></div>
+          </div>
+          <div style="font-size:11px;color:#555;margin-top:5px">已公开：背包空间、接收箱容量</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 46px 1fr;gap:8px;margin-top:8px">
+        <div style="background:#aaa;border:2px inset #ddd;padding:8px">
+          <div style="display:flex;justify-content:space-between"><b>你的报价</b><span style="color:#9b1c1c">暂不可锁定</span></div>
+          <div style="height:68px;background:#8f8f8f;border:2px inset #ddd;margin-top:5px"></div>
+          <div style="display:flex;gap:5px;margin-top:6px"><label>附加 PKM</label><div style="flex:1;background:#9b8585;border:2px inset #ddd;padding:4px;color:#861313">6,000,000</div><button>最大</button></div>
+          <div style="color:#9b1515;font-size:11px;margin-top:4px">余额不足：还差 770,000 PKM。报价不能超过实际余额。</div>
+          <div style="margin-top:7px;background:#999;border:2px inset #ddd;padding:5px">
+            <b>交易能力检查</b>
+            <div style="color:#24721e">✓ 报价物品仍在原位置并已锁定</div>
+            <div style="color:#9b1515">✗ PKM 余额不足</div>
+            <div style="color:#24721e">✓ 宝可梦记录有效</div>
+            <div style="color:#24721e">✓ 对方资产有足够接收空间</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:center;font-size:26px">⇄</div>
+        <div style="background:#aaa;border:2px inset #ddd;padding:8px">
+          <div style="display:flex;justify-content:space-between"><b>训练家小明的报价</b><span style="color:#24721e">可锁定</span></div>
+          <div style="height:68px;background:#8f8f8f;border:2px inset #ddd;margin-top:5px"></div>
+          <div style="display:flex;gap:5px;margin-top:6px"><label>附加 PKM</label><div style="flex:1;background:#999;border:2px inset #ddd;padding:4px">600,000</div></div>
+          <div style="color:#555;font-size:11px;margin-top:4px">具体余额未公开；服务端确认资金充足。</div>
+          <div style="margin-top:7px;background:#999;border:2px inset #ddd;padding:5px">
+            <b>交易能力检查</b>
+            <div style="color:#24721e">✓ 物品有效</div>
+            <div style="color:#24721e">✓ 资金充足</div>
+            <div style="color:#24721e">✓ 宝可梦记录有效</div>
+            <div style="color:#24721e">✓ 你的接收空间充足</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><span style="font-size:11px;color:#555">能力状态由服务端计算，不公开具体资产也不能伪造“资金充足”。</span><span><button>修改公开范围</button> <button disabled>余额不足，无法锁定</button></span></div>
+    </div>
+  </div>
+</div>
+
+<div class="split" style="margin-top:20px">
+  <div class="mockup"><div class="mockup-header">资产公开设置</div><div class="mockup-body" style="background:#211d29;padding:28px;font-family:monospace;color:#292929"><div style="width:350px;margin:auto;background:#c5c5c5;border:3px solid #222;padding:10px"><h3 style="margin-top:0">本次交易公开范围</h3><label style="display:block;margin:7px"><input type="checkbox" checked> 公开钱包具体余额</label><label style="display:block;margin:7px"><input type="checkbox" checked> 公开背包空槽数量</label><label style="display:block;margin:7px"><input type="checkbox"> 公开背包物品摘要</label><label style="display:block;margin:7px"><input type="checkbox" checked> 公开队伍宝可梦摘要</label><label style="display:block;margin:7px"><input type="checkbox"> 公开指定 PC 盒子摘要</label><label style="display:block;margin:7px"><input type="checkbox"> 公开指定箱子物品摘要</label><div style="font-size:11px;color:#555;margin:8px 0">“资金是否充足、资产是否有效、空间是否足够”始终对双方显示。</div><div style="text-align:right"><button>取消</button> <button style="background:#d7c77a">应用</button></div></div></div></div>
+  <div class="mockup"><div class="mockup-header">隐私状态</div><div class="mockup-body" style="background:#211d29;padding:28px;font-family:monospace;color:#292929"><div style="width:350px;margin:auto;background:#c5c5c5;border:3px solid #222;padding:10px"><h3 style="margin-top:0">未公开资产的显示方式</h3><div style="background:#999;border:2px inset #ddd;padding:7px;margin:5px 0"><b>钱包：未公开</b><br><span style="color:#24721e">资金充足 ✓</span></div><div style="background:#999;border:2px inset #ddd;padding:7px;margin:5px 0"><b>PC：未公开</b><br><span style="color:#24721e">接收宝可梦空间充足 ✓</span></div><div style="background:#999;border:2px inset #ddd;padding:7px;margin:5px 0"><b>箱子：未公开</b><br><span style="color:#9b1515">指定接收箱空间不足 ✗</span></div><p style="font-size:11px;color:#555">系统只暴露完成交易所必需的布尔状态，不泄露具体数字和物品内容。</p></div></div></div>
+</div>
+
+<div class="options" style="margin-top:18px">
+  <div class="option" data-choice="approve-v6-assets" onclick="toggleSelect(this)"><div class="letter">✓</div><div class="content"><h3>批准资产展示设计</h3><p>纳入最终方案并开始分阶段实现。</p></div></div>
+  <div class="option" data-choice="revise-v6-assets" onclick="toggleSelect(this)"><div class="letter">↺</div><div class="content"><h3>继续调整</h3><p>回到对话说明资产公开或能力检查要修改的规则。</p></div></div>
+</div>

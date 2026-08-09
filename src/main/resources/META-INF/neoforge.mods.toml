@@ -1,0 +1,27 @@
+modLoader="javafml"
+loaderVersion="${neo_version}"
+license="MIT"
+issueTrackerURL="https://example.com/issues"
+
+[[mods]]
+modId="poketrade"
+version="${version}"
+displayName="PokeTrade"
+logoFile="poketrade.png"
+description='''
+为 Pixelmon 物品提供宝可元（PKM）定价，并加入转化桌：将物品存入换算成宝可元存入玩家钱包，再用宝可元兑换任意已定价物品。金币系统与 Pixelmon 钱包共用同一数值。
+'''
+
+[[dependencies.poketrade]]
+    modId="neoforge"
+    type="required"
+    versionRange="[21.1.0,22.0.0)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.poketrade]]
+    modId="pixelmon"
+    type="required"
+    versionRange="[9.3.0,)"
+    ordering="AFTER"
+    side="BOTH"

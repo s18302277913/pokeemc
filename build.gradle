@@ -1,0 +1,161 @@
+plugins {
+    id 'java'
+    id 'eclipse'
+    id 'idea'
+    // https://projects.neoforged.net/neoforged/ModDevGradle
+    id 'net.neoforged.moddev' version '2.0.78'
+}
+
+tasks.named('wrapper', Wrapper) {
+    gradleVersion = '8.12.1'
+    distributionType = Wrapper.DistributionType.ALL
+}
+
+defaultTasks 'build'
+
+version = "${mod_version}"
+group = "com.pokeemc"
+project.base.archivesName = "poketrade"
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+neoForge {
+    enable {
+        version = neo_version
+    }
+
+    mods {
+        poketrade {
+            sourceSet(sourceSets.main)
+        }
+    }
+
+    runs {
+        // gradle.properties 的 org.gradle.jvmargs 设置了 -Dfile.encoding=GBK
+        // （测试 worker 用 GBK 读 @argfile，否则中文路径乱码）。但 daemon 会把
+        // 该参数传播给 forked 的 run JVM，导致 UTF-8 的 neoforge.mods.toml 被
+        // 以 GBK 解析而崩溃（"not a valid mod file"）。这里显式加回 UTF-8，
+        // 该参数出现在 Gradle 注入的 GBK 之后，后者生效（已实测验证）。
+        client {
+            client()
+            jvmArgument '-Dfile.encoding=UTF-8'
+        }
+        server {
+            server()
+            jvmArgument '-Dfile.encoding=UTF-8'
+        }
+        gameTestServer {
+            type = "gameTestServer"
+            gameDirectory = file("run-gametest")
+            // 启用 poketrade 命名空间的 GameTest 注册（GameTestHooks 按该属性过滤）
+            systemProperty 'neoforge.enabledGameTestNamespaces', 'poketrade'
+            jvmArgument '-Dfile.encoding=UTF-8'
+        }
+    }
+}
+
+// GameTest 服务器需要 pixelmon 作为运行时 mandatory 依赖（neoforge.mods.toml 声明
+// pixelmon >= 9.3.0），而 gameDirectory 独立于 run/。这里在启动前自动把仓库里的
+// pixelmon.jar 同步到 run-gametest/mods/，避免每次手动复制。
+tasks.named('runGameTestServer') {
+    doFirst {
+        def modsDir = file('run-gametest/mods')
+        modsDir.mkdirs()
+        def pixelmonJar = file('../pixelmon.jar')
+        def target = new File(modsDir, 'pixelmon.jar')
+        if (!pixelmonJar.exists()) {
+            throw new GradleException("pixelmon.jar not found: ${pixelmonJar}")
+        }
+        if (!target.exists() || pixelmonJar.length() != target.length()) {
+            copy {
+                from pixelmonJar
+                into modsDir
+            }
+            logger.lifecycle('GameTestServer: synced pixelmon.jar -> run-gametest/mods/')
+        }
+    }
+}
+
+allprojects {
+    repositories {
+        mavenCentral()
+    }
+}
+
+// maven.neoforged.net is unreachable from this network (Java TLS Connection reset),
+// so ModDevGradle's injected repositories are re-pointed at a local caching proxy
+// (nf-proxy.ps1) that downloads via curl and caches to D:\nf-mirror-cache.
+def localProxy = 'http://127.0.0.1:18080'
+afterEvaluate {
+    repositories.withType(MavenArtifactRepository).configureEach { repo ->
+        switch (repo.name) {
+            case 'NeoForged Releases':
+                repo.setUrl(localProxy + '/releases')
+                repo.allowInsecureProtocol = true
+                break
+            case 'Mojang Meta':
+                repo.setUrl(localProxy + '/mojang-meta')
+                repo.allowInsecureProtocol = true
+                break
+        }
+    }
+}
+
+dependencies {
+    // implementation 提供编译 classpath；jarJar 把 api jar 嵌入 mod 产物；
+    // additionalRuntimeClasspath 让 dev 运行时（legacy classpath）也能加载 API 类。
+    implementation project(':poketrade-api')
+    jarJar(project(':poketrade-api'))
+    additionalRuntimeClasspath project(':poketrade-api')
+    compileOnly files('../pixelmon.jar')
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation project(':poketrade-api-testkit')
+    // ModDevGradle only wires Minecraft/NeoForge (incl. brigadier, DFU, fastutil...)
+    // into the main source set. Regression tests that load DeferredRegister /
+    // Registries must reuse the full main runtime classpath to see those classes.
+    testImplementation sourceSets.main.runtimeClasspath
+}
+
+tasks.withType(JavaCompile).configureEach({
+    options.encoding = 'UTF-8'
+    options.compilerArgs.addAll(['-Xmaxerrs', '100000'])
+})
+
+// 子项目（poketrade-api 等）独立编译，必须同样强制 UTF-8，否则 Windows 默认
+// GBK 会把 UTF-8 的中文注释/字符串读成乱码而编译失败（clean 后必然复现）。
+subprojects {
+    tasks.withType(JavaCompile).configureEach({
+        options.encoding = 'UTF-8'
+        options.compilerArgs.addAll(['-Xmaxerrs', '100000'])
+    })
+    tasks.withType(Test).configureEach({
+        jvmArgs '-Dfile.encoding=UTF-8'
+    })
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    jvmArgs '-Dfile.encoding=UTF-8'
+}
+
+tasks.named('processResources', ProcessResources) {
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+    // daemon file.encoding=GBK（见 gradle.properties）会让 Copy/expand 默认用 GBK
+    // 读写文件，把 UTF-8 的 neoforge.mods.toml（含中文 description）写乱，
+    // 导致 ModLoader 报 "not a valid mod file"。这里强制 UTF-8。
+    filteringCharset = 'UTF-8'
+    def versionProperties = [
+            'version': mod_version,
+            'mc_version': minecraft_version_range,
+            'neo_version': loader_version_range
+    ]
+    inputs.properties(versionProperties)
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand versionProperties
+    }
+}
