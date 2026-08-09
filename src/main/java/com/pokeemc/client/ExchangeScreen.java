@@ -2283,8 +2283,12 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                         }
                     }
                     if (perms.length() > 0) {
+                        // [CHANGED] Bug 修复：Component.translatable 的 args 必须是
+                        // Component/Number/Boolean/String 单值，StringBuilder 会触发
+                        // TranslatableContents 参数校验异常（此前 renderTooltip 从未被调用
+                        // 而掩盖，Bug D 修复后悬停仓储表头即崩溃）。转 String 传入。
                         lines.add(Component.translatable(
-                                "poketrade.storage.permissions", perms));
+                                "poketrade.storage.permissions", perms.toString()));
                     }
                     g.renderTooltip(this.font, lines, java.util.Optional.empty(), mouseX, mouseY);
                     return;

@@ -164,3 +164,4 @@ _（后续会话按时间倒序追加于此）_
 - [x] 新增回归单测：`ExchangePriceServiceTest.liveCatalogTracksPkmVersionChanges`（Bug A）、`DefaultPkmValuesTest`（Bug B/C）。
 - [ ] **已知边界**：客户端目录为打开 UI 时的快照，游戏内数据包重载（`/reload`）后需重新打开交易所/转化桌才会拉到新目录；服务端 `quote()` 已实时（版本检测），不会误售失败，仅展示层短暂旧价。可后续立项为目录推送/失效广播。
 - [ ] 1.20.x 旧版本物品（如 `calibrated_sculk_sensor` 等）定价由合成树覆盖，若个别掉落物仍无价可续补 `VANILLA_BASE`（可维护项）。
+- [x] **崩溃缺陷（会话 #6 续）**：Bug D 修复使 `ExchangeScreen.renderTooltip` 首次真正执行，暴露既有潜在 bug——`Component.translatable("poketrade.storage.permissions", perms)` 传入 `StringBuilder`，MC 要求 args 为 Component/Number/Boolean/String 单值，悬停仓储表头即抛 `IllegalArgumentException: TranslatableContents' arguments...` 崩溃（crash-2026-08-09_12.13.12）。已改 `perms.toString()`；其余分支（source/cart）参数均合法，其他 screen 用 `.getString()` 拼接无此问题。`gradlew build --offline` 全绿。
