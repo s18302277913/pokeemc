@@ -61,20 +61,23 @@ neoForge {
 // GameTest 服务器需要 pixelmon 作为运行时 mandatory 依赖（neoforge.mods.toml 声明
 // pixelmon >= 9.3.0），而 gameDirectory 独立于 run/。这里在启动前自动把仓库里的
 // pixelmon.jar 同步到 run-gametest/mods/，避免每次手动复制。
+// [CHANGED] 配置缓存兼容：doFirst 执行期闭包不得引用 Gradle script 对象（file()/copy()/project），
+// 否则报 "Cannot reference a Gradle script object from a Groovy closure"（runGameTestServer FAILED）。
+// 改为配置期捕获纯 File 值 + java.nio Files.copy；闭包内仅剩 task 自身 API（logger 解析到
+// task.getLogger()）。build/test 等其余任务仍正常享受配置缓存。
 tasks.named('runGameTestServer') {
+    def modsDir = new File(projectDir, 'run-gametest/mods')
+    def pixelmonJar = new File(projectDir, '../pixelmon.jar')
+    def target = new File(modsDir, 'pixelmon.jar')
     doFirst {
-        def modsDir = file('run-gametest/mods')
         modsDir.mkdirs()
-        def pixelmonJar = file('../pixelmon.jar')
-        def target = new File(modsDir, 'pixelmon.jar')
         if (!pixelmonJar.exists()) {
             throw new GradleException("pixelmon.jar not found: ${pixelmonJar}")
         }
         if (!target.exists() || pixelmonJar.length() != target.length()) {
-            copy {
-                from pixelmonJar
-                into modsDir
-            }
+            java.nio.file.Files.copy(
+                    pixelmonJar.toPath(), target.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
             logger.lifecycle('GameTestServer: synced pixelmon.jar -> run-gametest/mods/')
         }
     }

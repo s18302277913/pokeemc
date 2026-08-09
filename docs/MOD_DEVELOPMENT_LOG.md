@@ -56,7 +56,7 @@
 
 ## 会话记录存档区
 
-### [2026-08-09 10:29] 会话 #3 — 官方 API 合规审计（Batch 4）：弃用/待删 API 清零（commit `c8bd04b`）
+### [2026-08-09 10:29] 会话 #3 — 官方 API 合规审计（Batch 4）：弃用/待删 API 清零（commit `3209932`）
 
 ### 🎯 本次需求
 延续"严格按照官方api标准重做pokeemc"：Batch 1~3 已完成并提交（`f19d43d`、`5a6f7b9`）。
@@ -68,10 +68,11 @@
 - **ADR-16（Item.builtInRegistryHolder() 弃用）**：6 处改为 `BuiltInRegistries.ITEM.getKey(item)`（返回 `ResourceLocation`，非弃用、语义等价）。涉及 `PKMManager`×2、`PkmRecipeCalculator`×2、`CondenserScreen`、`TransmutationTableScreen`。
 - **ADR-17（FastUtil Object2LongMap 装箱弃用）**：`entrySet()`/`put(K,Long)` 装箱变体弃用，改 `object2LongEntrySet()` + `getLongValue()` 原语访问（`PKMManager.clearComputed`、`ExchangePriceService.pkmFallback`），消除自动装箱。
 - **ADR-18（RegistryFriendlyByteBuf 构造弃用）**：`(ByteBuf, RegistryAccess)` 弃用，Neo 补丁 javadoc 指明 "use overload with ConnectionType context"。测试改用 `(ByteBuf, RegistryAccess, ConnectionType.OTHER)`。
+- **ADR-19（runGameTestServer 配置缓存兼容）**：`build.gradle` 的 `doFirst` 闭包在执行期引用 script 对象（`file()`/`copy {}`/`project`），配置缓存下报 `Cannot reference a Gradle script object from a Groovy closure`。改为配置期捕获纯 `File` 值 + `java.nio.Files.copy`，闭包内仅剩 task 自身 API（`logger` 解析到 `task.getLogger()`）。修复后配置缓存正常存储，GameTest 全量通过。
 
 ### ⚠️ 遗留风险与待办 (TODOs)
-- [ ] Batch 4 提交 + GameTest（`runGameTestServer`）+ `gradlew build --offline` 终验与日志归档（Task #4）。
-- [ ] 58 个测试类 + GameTest 迁移核对：`:test` 已全绿，`runGameTestServer` 待跑。
+- [x] Batch 4 提交（`3209932`）+ GameTest（`runGameTestServer` **39/39 通过**）+ `gradlew build --offline` 终验。
+- [x] 58 个测试类 + GameTest 迁移核对：`:test` 全绿（BUILD SUCCESSFUL）、`runGameTestServer` 39/39。
 - [ ] 后续可立项：Datagen 引入（本轮明确排除，保留手写 JSON）。
 
 ### [2026-08-09] 会话 #2 — 官方 API 标准重做：摸底完成，方案提交
