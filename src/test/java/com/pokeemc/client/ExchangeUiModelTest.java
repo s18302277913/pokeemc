@@ -448,4 +448,37 @@ class ExchangeUiModelTest {
         assertEquals(0, ExchangeUiModel.clampScroll(-1, 3, 1));
         assertEquals(2, ExchangeUiModel.clampScroll(5, 3, 1));
     }
+
+    @Test
+    void groupCountAccumulatesMatchingLinesOnly() {
+        List<ExchangeUiModel.SourceLine> source = List.of(
+                new ExchangeUiModel.SourceLine("mod:a", "A", 3),
+                new ExchangeUiModel.SourceLine("mod:a", "A", 5),
+                new ExchangeUiModel.SourceLine("mod:b", "B", 7),
+                new ExchangeUiModel.SourceLine("mod:a", "A", 1));
+
+        // 同 ID 多行累加、异 id 隔离
+        assertEquals(9, ExchangeUiModel.groupCount(source, "mod:a"));
+        assertEquals(7, ExchangeUiModel.groupCount(source, "mod:b"));
+        assertEquals(0, ExchangeUiModel.groupCount(source, "mod:missing"));
+        // 空源 / 0 计数
+        assertEquals(0, ExchangeUiModel.groupCount(List.of(), "mod:a"));
+        assertEquals(0, ExchangeUiModel.groupCount(
+                List.of(new ExchangeUiModel.SourceLine("mod:a", "A", 0)), "mod:a"));
+    }
+
+    @Test
+    void shiftSellNeedsConfirmRespectsThresholdGuardAndOverflow() {
+        // 阈值 0 = 关闭确认（与 SellPreview.scan 的 confirmThreshold>0 守卫一致）
+        assertFalse(ExchangeUiModel.shiftSellNeedsConfirm(10, 100, 0));
+        // 数量/单价非法恒 false
+        assertFalse(ExchangeUiModel.shiftSellNeedsConfirm(0, 100, 100_000));
+        assertFalse(ExchangeUiModel.shiftSellNeedsConfirm(10, 0, 100_000));
+        // 边界：等于阈值需确认、略低不确认、远超阈值需确认
+        assertTrue(ExchangeUiModel.shiftSellNeedsConfirm(1000, 100, 100_000));
+        assertFalse(ExchangeUiModel.shiftSellNeedsConfirm(999, 100, 100_000));
+        assertTrue(ExchangeUiModel.shiftSellNeedsConfirm(2000, 100, 100_000));
+        // 乘法溢出按需确认（安全处理）
+        assertTrue(ExchangeUiModel.shiftSellNeedsConfirm(Long.MAX_VALUE, Long.MAX_VALUE, 100_000));
+    }
 }

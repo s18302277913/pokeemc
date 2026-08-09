@@ -215,3 +215,20 @@ _（后续会话按时间倒序追加于此）_
 - [x] 改造完成，验证链全绿：`compileJava` → `:test` 全量（642 项，含新增 `storageScopeSnapsNonStepValuesToNextLargerStepOrDefault`，并修正两处引用旧上限 512/128 的断言为常量引用）→ `runGameTestServer`（**40/40**）→ `build --offline`。
 - [ ] **性能风险注意**：648 半径扫描（约 1.3M 方块区）依赖区块加载与 `MAX_SCANNED_PER_QUERY=2000` 硬上限截断；实际游戏若发现大范围查询造成服务端卡顿，可将 `StorageConfig.MAX_PLAYER_RADIUS`/`MAX_ADMIN_RADIUS` 回调为 512（同时降 `StorageViewModel`/`QueryStoragesPacket` 上限，注意三者一致），或保留 UI 上限仅收紧服务端预算。
 - [ ] **UI 交互依赖运行时验证**：GameTest 无法覆盖客户端渲染/点击，请在游戏中打开交易所→点击「范围」按钮确认依次 16→32→64→128→256→512→648→16 循环、每击触发重新扫描，且按钮高亮与文本正常。
+
+### [2026-08-09 13:57] 会话 #10 — Shift 直接贩卖（物品/物品组）+ 左右 Shift 键位归属隔离配置
+
+### 🎯 本次需求
+玩家反馈：期望的「Shift 直接贩卖物品与物品组」从未生效，怀疑与左栏仓储的 Shift 交互冲突，建议加隔离与可配置项（或区分左右 Shift）。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-35（"Shift 贩卖没生效"根因 = 该功能从未实现，非冲突）**：`git log -S` 与全量 grep 实证从基线提交起 `hasShiftDown()` 仅两处用途——目录拖拽数量 ×64（`ExchangeScreen:906`）、左栏仓储 Shift=取出（`:1327`）；背包区 Shift+点击落入原版 `QUICK_MOVE` → `ExchangeMenu.quickMoveStack`（`ExchangeMenu:247-274`）只做背包内部搬移，菜单层无任何出售逻辑。故按用户三项确认实现为**新增功能**：① 键位归属=左右 Shift 区分 + 客户端配置 `shiftSellHand`（OFF/LEFT/RIGHT，默认 LEFT）；② 语义=Shift+左键卖整叠、Shift+右键卖背包+副手同 ID 全部；③ 二次确认=价值 ≥ `requireConfirmValue`（默认 10 万）复用出售预览 modal 确认，否则直接发包。
+- **ADR-36（左右 Shift 天然隔离 + 可配置归属；`hasShiftDown()` 无法区分左右，改用 GLFW 键位）**：新增客户端 ModConfigSpec（`PokeTradeConfig.CLIENT_SPEC`，写入 `config/poketrade-client.toml`，仅物理客户端加载，getter 带 `isLoaded()` 守卫回退 LEFT）。`Screen.hasShiftDown()` 对左右 shift 做或运算不可区分，故 `shiftSellActive()` 用 `InputConstants.isKeyDown(window, GLFW_KEY_LEFT_SHIFT/RIGHT_SHIFT)` 按配置实时查询；仓储取出改用**非贩卖键**那只（`storageWithdrawShift()`：LEFT→查右 Shift、RIGHT→查左 Shift、OFF→任意 Shift），实现"左 Shift 点背包=卖、右 Shift 点仓储=取出"的隔离。mouseClicked 拦截点选在左栏处理之后、拖卖记录段之前：条件 `shiftSellActive() && (button==0||1) && !workflow.pending() && carried.isEmpty() && inventoryRect.contains`，`return true` 短路原版 QUICK_MOVE/取一半。
+- **ADR-37（统一门控 + 复用 SellPreview.scan，直卖不经 modal 无闪烁）**：整叠/整组都收敛到 `shiftSell(SourceLine)`——经 `SellPreview.scan` 过滤黑白名单/无价（黑名单/白名单拦截给出本地 `sell.blocked` 文案，避免服务端报「未知物品」的困惑）；未超阈值直接 `sendInventorySell`（新方法，`workflow.begin` 防重复，与 `sellSingleDirect` 平行、不改现有方法），超阈值才置 `sellPreview` 弹 modal（复用 confirmPreview 的"第一击置位、第二击发包"）。`SellPreview.scan` 聚合与服务端 `sellFromInventory`（`countInInventory` 含副手、无单行数量硬上限）天然匹配，卖组单行 ≤2368 直接发送。
+- **ADR-38（新增纯静态可测逻辑 + 守卫断言）**：`ExchangeUiModel.groupCount`（卖组同 ID 聚合）与 `ExchangeUiModel.shiftSellNeedsConfirm`（`confirmThreshold<=0 || count<=0` 恒 false，与 scan 的 `>0` 守卫一致，保证配置 0=关闭确认生效；`multiplyExact` 溢出按需确认）均为纯函数便于 JUnit；`PokeTradeConfigTest.shiftSellHandFallsBackToLeftWhenClientSpecUnloaded` 锁定 CLIENT spec 未加载时守卫回退。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [x] 功能完成，验证链全绿：`compileJava` → `:test` 全量（645 项，含新增 3 个测试）→ `runGameTestServer`（**40/40**）→ `build --offline`。
+- [ ] **UI 交互依赖运行时验证**：GameTest 无法覆盖客户端渲染/点击，请游戏中验证——交易所界面左 Shift+左键点背包物品=卖整叠、左 Shift+右键=卖整组；右 Shift+点击仓储槽=取出（不与贩卖冲突）；价值超 10 万弹预览需二次确认；改 `config/poketrade-client.toml` 的 `shiftSellHand=OFF/RIGHT` 后行为相应变化。
+- [ ] **已知边界**：① 副手独有物品无槽位可点，无法触发 Shift 贩卖（可用批量出售按钮）；② 卖组按 itemId 聚合会把不同 NBT 的同 ID 物品一起卖（与现有 `sellInventory` 一致）；③ 贩卖键按下时拖卖记录不触发、拖动存入禁用（意图内）；④ 目录拖拽 ×64 仍用 `hasShiftDown()`（任意 Shift），贩卖键兼作 ×64 修饰键（既有行为）；⑤ 服务端单行路由 `sellFromCarried`（ExchangeSellPacket:100-112）的理论风险已由客户端 `carried.isEmpty()` 保护，未改协议。
+- [ ] **文案跟随配置问题**：`zh_cn.json` 的 `snapshot.hint` 现写「取出/贩卖（左右Shift区分，可在配置调整）」为静态文案，无法反映玩家实际选择的 `shiftSellHand`；如后续需要精确提示，可改为渲染时动态拼装。

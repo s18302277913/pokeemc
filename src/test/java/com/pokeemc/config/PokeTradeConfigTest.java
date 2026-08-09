@@ -42,4 +42,11 @@ class PokeTradeConfigTest {
         assertEquals(20, PokeTradeConfig.sweepIntervalTicks());
         assertEquals(0, PokeTradeConfig.feePercent());
     }
+
+    @Test
+    void shiftSellHandFallsBackToLeftWhenClientSpecUnloaded() {
+        // [CHANGED] 会话 #10：CLIENT spec 在纯 JUnit/服务端/GameTest 下 isLoaded()==false，
+        // shiftSellHand() 必须回退默认 LEFT，不得抛 IllegalStateException。
+        assertEquals(PokeTradeConfig.ShiftSellHand.LEFT, PokeTradeConfig.shiftSellHand());
+    }
 }

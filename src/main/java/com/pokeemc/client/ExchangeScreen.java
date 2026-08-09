@@ -1,5 +1,6 @@
 package com.pokeemc.client;
 
+import com.pokeemc.config.PokeTradeConfig;
 import com.pokeemc.exchange.ExchangeService;
 import com.pokeemc.menu.ExchangeMenu;
 import com.pokeemc.network.ExchangeBuyPacket;
@@ -22,6 +23,7 @@ import com.poketrade.api.storage.StorageId;
 import com.poketrade.api.storage.StorageItemSlot;
 import com.poketrade.api.storage.StorageQuery;
 import com.poketrade.api.storage.StorageSnapshot;
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
@@ -546,8 +548,25 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             sellMessageColor = PeStyle.TEXT_ERROR;
             return;
         }
+        sellPreview = ExchangeUiModel.SellPreview.scan(inventorySource(), sellPrices(), MAX_SELL_LINES,
+                requireConfirmValue, ExchangeUiModel.SellSource.INVENTORY,
+                Set.copyOf(blockedItems), Set.copyOf(allowedItems), allowlistEnabled);
+        storagePreview = null;
+        previewPage = 0;
+        previewConfirmed = !sellPreview.requiresConfirmation();
+        if (sellPreview.lines().isEmpty()) {
+            sellPreview = null;
+            sellMessage = t("poketrade.exchange.sell.nothing");
+            sellMessageColor = PeStyle.TEXT_DIM;
+        }
+    }
+
+    /**
+     * [CHANGED] 会话 #10：扫描背包出售源（主 36 格 + 副手槽 40 号），与 {@link #sellInventory}
+     * 原扫描语义一致；供 Shift 贩卖卖整组时聚合同 ID 数量复用。
+     */
+    private List<ExchangeUiModel.SourceLine> inventorySource() {
         List<ExchangeUiModel.SourceLine> source = new ArrayList<>();
-        Map<String, Long> prices = sellPrices();
         Inventory inv = this.minecraft.player.getInventory();
         for (int i = 0; i < inv.items.size(); i++) {
             ItemStack stack = inv.getItem(i);
@@ -567,17 +586,126 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 source.add(new ExchangeUiModel.SourceLine(id.toString(), offhand.getHoverName().getString(), offhand.getCount()));
             }
         }
-        sellPreview = ExchangeUiModel.SellPreview.scan(source, prices, MAX_SELL_LINES,
-                requireConfirmValue, ExchangeUiModel.SellSource.INVENTORY,
+        return source;
+    }
+
+    // ================= Shift 直接贩卖（会话 #10） =================
+
+    /**
+     * [CHANGED] 会话 #10：当前配置的贩卖 Shift 键是否按下（左右 Shift 可区分；OFF=永不触发）。
+     * {@link Screen#hasShiftDown()} 无法区分左右，故用 GLFW 键位实时查询。
+     */
+    private boolean shiftSellActive() {
+        return switch (PokeTradeConfig.shiftSellHand()) {
+            case LEFT -> InputConstants.isKeyDown(minecraft.getWindow().getWindow(),
+                    GLFW.GLFW_KEY_LEFT_SHIFT);
+            case RIGHT -> InputConstants.isKeyDown(minecraft.getWindow().getWindow(),
+                    GLFW.GLFW_KEY_RIGHT_SHIFT);
+            case OFF -> false;
+        };
+    }
+
+    /**
+     * [CHANGED] 会话 #10：仓储取出使用的 Shift 键 = 非贩卖键的那只（OFF=任意 Shift），
+     * 与 Shift 贩卖实现键位隔离，避免「左 Shift 点背包=卖、点仓储却取出」的混淆。
+     */
+    private boolean storageWithdrawShift() {
+        return switch (PokeTradeConfig.shiftSellHand()) {
+            case LEFT -> InputConstants.isKeyDown(minecraft.getWindow().getWindow(),
+                    GLFW.GLFW_KEY_RIGHT_SHIFT);
+            case RIGHT -> InputConstants.isKeyDown(minecraft.getWindow().getWindow(),
+                    GLFW.GLFW_KEY_LEFT_SHIFT);
+            case OFF -> hasShiftDown();
+        };
+    }
+
+    /** [CHANGED] 会话 #10：Shift+左键点击背包物品 = 卖该格整叠。 */
+    private void shiftSellStack(ItemStack stack) {
+        ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        if (id == null) {
+            return;
+        }
+        shiftSell(new ExchangeUiModel.SourceLine(
+                id.toString(), stack.getHoverName().getString(), stack.getCount()));
+    }
+
+    /** [CHANGED] 会话 #10：Shift+右键点击背包物品 = 卖背包+副手全部同 ID 物品（整组）。 */
+    private void shiftSellGroup(ItemStack stack) {
+        ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        if (id == null) {
+            return;
+        }
+        long total = ExchangeUiModel.groupCount(inventorySource(), id.toString());
+        if (total <= 0) {
+            return;
+        }
+        shiftSell(new ExchangeUiModel.SourceLine(
+                id.toString(), stack.getHoverName().getString(), (int) total));
+    }
+
+    /**
+     * [CHANGED] 会话 #10：Shift 贩卖统一门控（整叠/整组共用）。经 {@code SellPreview.scan} 过滤
+     * 黑白名单/无价后：不可售 → 本地清晰提示（M1，避免服务端报「未知物品」的困惑）；未超
+     * 二次确认阈值 → 直接发包；超阈值 → 弹出售预览 modal 二次确认（复用现有交互）。
+     */
+    private void shiftSell(ExchangeUiModel.SourceLine line) {
+        if (!sellEnabled) {
+            sellMessage = t("poketrade.exchange.sell.disabled");
+            sellMessageColor = PeStyle.TEXT_ERROR;
+            return;
+        }
+        if (workflow.pending()) {
+            return;
+        }
+        ExchangeUiModel.SellPreview preview = ExchangeUiModel.SellPreview.scan(
+                List.of(line), sellPrices(), MAX_SELL_LINES, requireConfirmValue,
+                ExchangeUiModel.SellSource.INVENTORY,
                 Set.copyOf(blockedItems), Set.copyOf(allowedItems), allowlistEnabled);
+        if (preview.lines().isEmpty()) {
+            showShiftSellBlocked(preview);
+            return;
+        }
+        if (!preview.requiresConfirmation()) {
+            // 未超阈值：直接发聚合行，不弹 modal
+            sendInventorySell(preview.lines().stream()
+                    .map(l -> new ExchangeSellPacket.LineWire(l.itemId(), l.count()))
+                    .toList());
+            return;
+        }
+        // 超阈值：弹 modal，第一击确认按钮置位、第二击才发包（复用 confirmPreview 语义）
+        sellPreview = preview;
         storagePreview = null;
         previewPage = 0;
-        previewConfirmed = !sellPreview.requiresConfirmation();
-        if (sellPreview.lines().isEmpty()) {
-            sellPreview = null;
-            sellMessage = t("poketrade.exchange.sell.nothing");
-            sellMessageColor = PeStyle.TEXT_DIM;
+        previewConfirmed = false;
+    }
+
+    /** [CHANGED] 会话 #10：Shift 贩卖被拦截（无价/黑名单/白名单）时的本地提示，按跳过原因区分文案。 */
+    private void showShiftSellBlocked(ExchangeUiModel.SellPreview preview) {
+        String key = "poketrade.exchange.sell.nothing";
+        for (ExchangeUiModel.SkipReason reason : preview.skipReasons()) {
+            switch (reason) {
+                case NO_PRICE -> key = "poketrade.exchange.sell.no_price";
+                case BLACKLISTED, NOT_ALLOWED -> key = "poketrade.exchange.sell.blocked";
+                default -> { /* ZERO_COUNT 维持默认文案 */ }
+            }
         }
+        sellMessage = t(key);
+        sellMessageColor = PeStyle.TEXT_ERROR;
+    }
+
+    /** [CHANGED] 会话 #10：背包出售直接发包（单行/聚合行；与 {@link #sellSingleDirect} 平行，
+     *  {@code workflow.begin} 防重复提交）。 */
+    private void sendInventorySell(List<ExchangeSellPacket.LineWire> lines) {
+        if (!sellEnabled || lines.isEmpty() || workflow.pending()) {
+            return;
+        }
+        if (!workflow.begin(ExchangeUiModel.Operation.INVENTORY_SELL, menu.getResultNonce())) {
+            return;
+        }
+        PacketDistributor.sendToServer(new ExchangeSellPacket(
+                UUID.randomUUID().toString(), UUID.randomUUID().toString(), lines));
+        sellMessage = t("poketrade.exchange.sell.sent");
+        sellMessageColor = PeStyle.TEXT_DIM;
     }
 
     private Map<String, Long> sellPrices() {
@@ -925,6 +1053,27 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (!leftCollapsed && layout.left().contains(x, y)) {
             handleLeftClick(x, y, button);
             return true;
+        }
+        // [CHANGED] 会话 #10：Shift 直接贩卖（背包区）。左键=卖整叠、右键=卖同ID整组。
+        // 条件要点：!workflow.pending() 防事务中吞点击；(button==0||1) 防中键被吞；
+        // carried 空防持物误卖；此时 modal(872-890)/右键菜单(839-850)/左栏已 return，天然隔离。
+        // 短路 return true 使原版 QUICK_MOVE / 取一半不执行。
+        if (shiftSellActive() && (button == 0 || button == 1)
+                && !workflow.pending() && menu.getCarried().isEmpty()
+                && layout.inventoryRect().contains(x, y)) {
+            int idx = (x - layout.inventoryRect().x()) / SLOT
+                    + ((y - layout.inventoryRect().y()) / SLOT) * 9;
+            if (idx >= 0 && idx < 36) {
+                ItemStack clicked = menu.slots.get(idx).getItem();
+                if (!clicked.isEmpty()) {
+                    if (button == 0) {
+                        shiftSellStack(clicked);
+                    } else {
+                        shiftSellGroup(clicked);
+                    }
+                    return true;
+                }
+            }
         }
         // 记录从玩家背包按下的槽位（拖动卖用；super 会执行原版拿起）
         if (button == 0 && menu.getCarried().isEmpty() && layout.inventoryRect().contains(x, y)) {
@@ -1324,7 +1473,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (slot == null) {
             return;
         }
-        if (hasShiftDown()) {
+        // [CHANGED] 会话 #10：仓储取出用「非贩卖键」的 Shift（默认右 Shift），与背包 Shift 贩卖隔离。
+        if (storageWithdrawShift()) {
             withdrawFromStorage(slot);
             return;
         }

@@ -60,6 +60,10 @@ public class PokeEMC {
         // 服务端配置（config/poketrade-server.toml，随存档 serverconfig 持久化）
         ModLoadingContext.get().getActiveContainer()
                 .registerConfig(ModConfig.Type.SERVER, PokeTradeConfig.SPEC);
+        // [CHANGED] 会话 #10：客户端配置（config/poketrade-client.toml，Shift 贩卖归属键）。
+        // CLIENT spec 仅物理客户端加载；服务端/GameTest/JUnit 下 isLoaded()=false 走守卫回退。
+        ModLoadingContext.get().getActiveContainer()
+                .registerConfig(ModConfig.Type.CLIENT, PokeTradeConfig.CLIENT_SPEC);
 
         ModBlocks.register(modEventBus);
         ModItems.register(modEventBus);

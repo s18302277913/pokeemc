@@ -490,6 +490,31 @@ final class ExchangeUiModel {
         }
     }
 
+    /** [CHANGED] 会话 #10：统计同 ID 物品在扫描源中的总数量（Shift 右键卖整组用；纯逻辑便于测试）。 */
+    static long groupCount(List<SourceLine> source, String itemId) {
+        long total = 0L;
+        for (SourceLine line : source) {
+            if (line.itemId().equals(itemId)) {
+                total += line.count();
+            }
+        }
+        return total;
+    }
+
+    /** [CHANGED] 会话 #10：Shift 贩卖是否需二次确认。阈值/数量非法恒 false（与
+     *  {@link SellPreview#scan} 的 {@code confirmThreshold > 0} 守卫一致，保证配置
+     *  0=关闭确认生效）；乘法溢出按需确认（安全处理）。 */
+    static boolean shiftSellNeedsConfirm(long count, long unitPrice, long confirmThreshold) {
+        if (confirmThreshold <= 0 || count <= 0) {
+            return false;
+        }
+        try {
+            return Math.multiplyExact(unitPrice, count) >= confirmThreshold;
+        } catch (ArithmeticException e) {
+            return true;
+        }
+    }
+
     /**
      * 仓储出售预览：在 {@link SellPreview} 之上附加仓储元数据（来源=仓储、选中仓储
      * 名称/ID、SELL 权限、revision）。无 SELL 权限或预览为空时禁止确认。

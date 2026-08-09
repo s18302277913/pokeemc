@@ -21,8 +21,20 @@ public final class PokeTradeConfig {
     private PokeTradeConfig() {
     }
 
+    /** [CHANGED] 会话 #10：Shift 直接贩卖归属键。OFF=关闭；LEFT/RIGHT=对应侧 Shift 作为贩卖键，
+     *  另一侧 Shift 保持原版语义（仓储取出/快移），实现键位隔离。 */
+    public enum ShiftSellHand {
+        OFF, LEFT, RIGHT
+    }
+
     /** 完整服务端配置规格（模组构造阶段注册到 {@code ModLoadingContext}）。 */
     public static final ModConfigSpec SPEC;
+
+    /** [CHANGED] 会话 #10：客户端配置规格（写入 {@code config/poketrade-client.toml}，
+     *  仅物理客户端加载；服务端/GameTest/JUnit 下 {@code isLoaded()} 为 false，走守卫回退）。 */
+    public static final ModConfigSpec CLIENT_SPEC;
+    /** [CHANGED] 会话 #10：Shift 直接贩卖归属键（私有，仅经 {@link #shiftSellHand()} 读取）。 */
+    private static final ModConfigSpec.EnumValue<ShiftSellHand> SHIFT_SELL_HAND;
 
     // ------------------------------------------------------------ storage 组
 
@@ -145,6 +157,16 @@ public final class PokeTradeConfig {
         builder.pop();
 
         SPEC = builder.build();
+
+        // [CHANGED] 会话 #10：客户端配置（Shift 直接贩卖归属键）。独立 builder 构建，
+        // 与服务端 SPEC 同块初始化，避免 getter 引用顺序混乱。
+        ModConfigSpec.Builder clientBuilder = new ModConfigSpec.Builder();
+        SHIFT_SELL_HAND = clientBuilder
+                .comment("Shift 直接贩卖归属键",
+                        "OFF=关闭 / LEFT=左Shift贩卖(背包)、右Shift保持原版(仓储取出/快移) / RIGHT=反向",
+                        "默认: LEFT")
+                .defineEnum("shiftSellHand", ShiftSellHand.LEFT);
+        CLIENT_SPEC = clientBuilder.build();
     }
 
     // ------------------------------------------------------------ 安全读取便捷方法
@@ -209,5 +231,11 @@ public final class PokeTradeConfig {
     /** PKM 百分比手续费（%），未加载时回退默认 0。 */
     public static int feePercent() {
         return SPEC.isLoaded() ? TRADE_FEE_PERCENT.get() : 0;
+    }
+
+    /** [CHANGED] 会话 #10：Shift 直接贩卖归属键。客户端 spec 未加载（服务端/GameTest/JUnit）
+     *  时回退默认 {@link ShiftSellHand#LEFT}。 */
+    public static ShiftSellHand shiftSellHand() {
+        return CLIENT_SPEC.isLoaded() ? SHIFT_SELL_HAND.get() : ShiftSellHand.LEFT;
     }
 }
