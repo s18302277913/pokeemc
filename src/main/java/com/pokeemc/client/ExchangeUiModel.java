@@ -731,4 +731,24 @@ final class ExchangeUiModel {
     static String formatAmount(long amount) {
         return String.format(Locale.US, "%,d", amount);
     }
+
+    /**
+     * [CHANGED] 会话 #12 问题 A：出售预览单行的「名称 / 价格」两列几何。
+     * 价格右对齐到弹窗右缘 -24（千分位多位永不越界），名称整行截断到价格起始前 6px，
+     * 两者永不重叠。纯函数便于单元测试。
+     *
+     * @param modal          预览弹窗矩形（价格右缘 = modal.right() - 24）
+     * @param lines          条目列表区矩形（名称左缘 = lines.x()）
+     * @param subtotalWidth  价格文本已截断后的实际像素宽度
+     * @return priceX（价格绘制 x 局部坐标）、nameMax（名称整行最大像素宽）
+     */
+    static PreviewRowLayout previewRowLayout(Rect modal, Rect lines, int subtotalWidth) {
+        int priceX = modal.right() - 24 - subtotalWidth;
+        int nameMax = Math.max(8, priceX - lines.x() - 6);
+        return new PreviewRowLayout(priceX, nameMax);
+    }
+
+    /** 出售预览单行两列几何（见 {@link #previewRowLayout}）。 */
+    record PreviewRowLayout(int priceX, int nameMax) {
+    }
 }

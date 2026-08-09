@@ -251,3 +251,23 @@ _（后续会话按时间倒序追加于此）_
 - [ ] **UI 交互依赖运行时验证**：GameTest 无法覆盖客户端渲染/点击，请游戏中验证——① 交易所内收起全部仓储后等待 10 秒自动刷新，确认不再自动展开、手风琴滚动位置不被弹回顶部；② 空箱/双箱展开显示容量骨架（单箱 4 行、双箱 7 可见行，物品少于整行时仍显示空槽背景），双箱物品填满时滚轮/滚动条可滚到第 8 排；③ 打开 pkm 目录确认 31 件 Pixelmon 物品已分层标价、`sculk_sensor`/陶器碎片/马铠出现在目录且可出售。
 - [ ] **定价为经济平衡主观决策**：本次按用户确认的「分层定价」落地；若服务器经济实测异常（刷钱/物价过高），可在 `data/poketrade/pkm/shop.json` 单独调整（数据包为权威，重启或 `/reload` 生效）。
 - [ ] **已知边界（问题 1）**：首包即空（首次打开时远离任何仓储）不会自动展开首个仓储，需手动点开——若希望"首次见到仓储才展开"，需把 `FirstQueryGate` 的 received 置位改为「首个非空回包」才消费（当前为无条件一次性置位）。
+
+### [2026-08-09 15:05] 会话 #12 — 出售预览价格穿模修复 + 交易所文字模糊根治（屏幕空间重画）
+
+### 🎯 本次需求
+玩家反馈两个 UI 问题：
+1. **批量出售预览表的价格与名称离得太远，价格超一定 x 位数时就穿模**——价格列溢出弹窗右边界。
+2. **当前交易所 UI 的文字样式显得很模糊**——要求更换一种文字样式解决。
+
+经读码确认根因，用户确认修复方向：问题 1 = **价格右对齐**（弹窗右缘锚定，名称动态截断，永不重叠）；问题 2 = **文字屏幕空间重画 + 缩放原点取整**（保留默认字体，不换字体资源，所有缩放档位下文字像素级清晰）。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-42（问题 1 根因 = 价格列左对齐固定 x + 名称截断不含数量后缀）**：`renderSellPreviewLabels` 原实现 `subtotal` 左对齐固定 `x = modal.right()-24`（=311），`ExchangeUiModel.formatAmount`（`%,d` 千分位）多位（如 `5,000,000`）时宽度超过 311→335 余量而溢出右边界；名称截断 `textWidth-74` 只对 displayName，不含 `×数量` 后缀，视觉上「名称与价格相距过远」。修复：价格**右对齐**到 `modal.right()-24`（`priceX = modal.right()-24 - font.width(subtotal)`，subtotal 完整千分位、仅超可用宽度 `modal.right()-24-lines.x()`=166px 才截断兜底）；名称**整行**（名称 ×数量）按 `priceX - lines.x() - 6` 截断，与价格永不重叠、短价格时名称可延展更宽。几何收敛到可测纯函数 `ExchangeUiModel.previewRowLayout(modal, lines, subtotalWidth)`（返回 `PreviewRowLayout(priceX, nameMax)`），便于 JUnit 断言。[CHANGED] `ExchangeScreen.java`（renderSellPreviewLabels 循环体）、`ExchangeUiModel.java`。
+- **ADR-43（问题 2 根因 = 缩放矩阵 float 原点 + 非整数缩放 → 字形落分数像素）**：`beginScaledRender`（`ExchangeScreen:269-283`）`scaledOriginX/Y = (window - image*uiScale)/2f` 为 **float**（奇数窗口尺寸产生 .5 像素平移），叠加 `uiScale∈{1.0,0.75,0.5}` 非整数缩放 → 字形落在分数像素被线性采样 → 模糊。根治采用**「几何照旧、文字记录后重放」**（D1，刻意不拆 renderLabels 为 Geom/Text 双胞胎——会导致按钮 enabled/selected/hovered、字符串拼装逻辑复制漂移）：矩阵内所有 `g.drawString`/`PeStyle.button` 改为记录到 `pendingText` 列表（含局部坐标 + `TextLayer{MAIN,TOP}` 层级），矩阵内只画几何；`endScaledRender` 之后以 `screenX/screenY = Math.round(scaledOriginX + local*uiScale)` 换算成**整数屏幕坐标**统一重放。`beginScaledRender` 原点改为 `Math.round(...)` 取整，与 screenX/Y 共用同一整数值 → 1.0 档 `screenX(local)-origin == local` 恒为整数（与改动前逐像素一致）、0.75/0.5 档文字落在整数像素。[CHANGED] `ExchangeScreen.java`（新增 TextLayer/TextDraw/pendingText/screenX/screenY/recordText/recordButton/recordSegmented/drawPendingText；render() 主流程拆分、矩阵外重放 + tooltip 移出）、`PeStyle.java`。
+- **ADR-44（PeStyle 纯新增，不动现有方法）**：`StorageBrowserScreen`(6 处)/`TransmutationTableScreen`(1 处) 仍调 `PeStyle.button/segmented`，故保留原方法，新增 `buttonBg()`/`segmentedBg()`（画背景 + 命中，不画文字）与 `buttonText()`/`segmentedText()`（返回 `ButtonText`/`SegmentedText` record：label 截断 + 居中局部坐标 + enabled/selected 取色），排版公式与旧 `button()` 内部逐字一致，由 `ExchangeScreen.recordButton/recordSegmented` 消费。[CHANGED] `PeStyle.java`。
+- **ADR-45（层级与取舍）**：① **TOP 层重放**——弹窗/右键菜单文字记录为 `TextLayer.TOP`，矩阵外以 `z=400 + disableDepthTest + flush` 同款纪律重放（MAIN 文字 z=0 在弹窗区域被 LEQUAL cull 不透出，行为与现状一致）；② **tooltip 移出矩阵**——`render()` 中 `renderTooltip` 移到 `endScaledRender` 之后传屏幕坐标 `mx/my`，方法内 `x = toLocalX(mouseX), y = toLocalY(mouseY)` 换算命中（与原 lmx/lmy 恒等），tooltip 文字/图标像素级清晰；③ **EditBox 内部文字/光标 + 2 处 hint（searchBox/storageSearchBox）刻意保留矩阵内**——vanilla `EditBox.render` 文字/背景强耦合，剥离需重写输入坐标映射，风险高收益低，且 hint 与输入文字同尺寸保持一致；④ **物品槽位数量（renderItemDecorations）与物品图标、拖拽浮动物品接受矩阵内缩放**——与槽位精灵/基类强耦合，数量多位少数。[CHANGED] `ExchangeScreen.java`（render() 全部调用点、renderTooltip 命中换算）。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [x] 两问题修复完成，验证链全绿：`compileJava` → `:test` 全量（**652 项**，含新增 `previewRowLayoutRightAlignsPriceAndReservesNameGap`/`previewRowLayoutNameNeverOverlapsPriceAtAnyPxWidth` 两个穿模几何测试）→ `runGameTestServer`（**40/40**）→ `build --offline`。
+- [ ] **UI 交互依赖运行时验证**：GameTest 无法覆盖客户端渲染/点击，请游戏中验证——① 三种窗口缩放档位（1.0/0.75/0.5）下主面板/按钮/钱包/页码/购物车统计/左栏行名/「末」徽标/流程消息/出售提示/右键菜单/出售预览弹窗文字全部清晰、无糊边，1.0 档文字与面板对齐无 0.5px 偏移；② 批量出售预览：`Master Ball ×1` 与 `5,000,000` 不重叠、超长名称截断、价格不出弹窗右缘；③ 弹窗打开时主界面文字被正确遮挡，tooltip 无弹窗时清晰、有弹窗时被抑制（早退逻辑不变）；④ 搜索框输入文字与占位提示尺寸一致（同为缩放态）。
+- [ ] **已知边界（文字清晰化的剩余模糊面）**：EditBox 输入文字/光标、物品槽位数量徽标、物品图标、拖拽浮动物品仍随缩放矩阵渲染（ADR-45 取舍）；0.75/0.5 档下这些元素随 UI 缩小，属缩放开方案固有特性，非本次文字目标。若后续需要，可将 EditBox 改为自定义渲染（剥离 vanilla 内部文字）彻底像素对齐。

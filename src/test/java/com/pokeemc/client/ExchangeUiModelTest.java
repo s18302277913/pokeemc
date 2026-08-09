@@ -536,4 +536,51 @@ class ExchangeUiModelTest {
         assertFalse(gate.onQuery(false, true));
         assertFalse(gate.onQuery(true, true));
     }
+
+    // ===== [CHANGED] 会话 #12：出售预览行两列几何（问题 A 价格穿模） =====
+
+    @Test
+    void previewRowLayoutRightAlignsPriceAndReservesNameGap() {
+        ExchangeUiModel.Layout layout = ExchangeUiModel.Layout.expanded();
+        ExchangeUiModel.Rect modal = layout.previewModal();
+        ExchangeUiModel.Rect lines = layout.previewLines();
+        int priceRight = modal.right() - 24;
+
+        // 短价格：价格右锚定，名称可用宽度大
+        ExchangeUiModel.PreviewRowLayout shortRow = ExchangeUiModel.previewRowLayout(modal, lines, 20);
+        assertEquals(priceRight - 20, shortRow.priceX());
+        assertTrue(shortRow.priceX() >= lines.x());
+        assertTrue(shortRow.nameMax() <= shortRow.priceX() - lines.x() - 6);
+
+        // 长价格（千分位多位）：右锚定不越界，名称预留 6px 间隙
+        ExchangeUiModel.PreviewRowLayout longRow =
+                ExchangeUiModel.previewRowLayout(modal, lines, 130);
+        assertEquals(priceRight - 130, longRow.priceX());
+        assertTrue(longRow.priceX() >= lines.x());
+        assertTrue(longRow.nameMax() <= longRow.priceX() - lines.x() - 6);
+
+        // 价格占满全部可用宽度（调用方已把 subtotal 截断到 modal.right()-24-lines.x()）：
+        // priceX 恰回落到 lines 左缘，名称宽度兜底 ≥8，仍不越界。
+        int maxPriceW = modal.right() - 24 - lines.x();
+        ExchangeUiModel.PreviewRowLayout maxRow =
+                ExchangeUiModel.previewRowLayout(modal, lines, maxPriceW);
+        assertEquals(modal.right() - 24 - maxPriceW, maxRow.priceX());
+        assertTrue(maxRow.priceX() >= lines.x());
+        assertEquals(8, maxRow.nameMax());
+    }
+
+    @Test
+    void previewRowLayoutNameNeverOverlapsPriceAtAnyPxWidth() {
+        ExchangeUiModel.Layout layout = ExchangeUiModel.Layout.expanded();
+        ExchangeUiModel.Rect modal = layout.previewModal();
+        ExchangeUiModel.Rect lines = layout.previewLines();
+        // 对任意价格宽度（0..lines 宽度 + 余量）：名称不重叠价格——
+        // 正常情况名称末端 ≤ 价格起始 - 6；价格极端长时 nameMax 兜底 8px（宁可贴近也不为零）。
+        for (int px = 0; px <= 200; px++) {
+            ExchangeUiModel.PreviewRowLayout row = ExchangeUiModel.previewRowLayout(modal, lines, px);
+            boolean fits = row.nameMax() <= row.priceX() - lines.x() - 6;
+            assertTrue(fits || row.nameMax() == 8,
+                    "px=" + px + " nameMax=" + row.nameMax() + " priceX=" + row.priceX());
+        }
+    }
 }

@@ -161,6 +161,63 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     /** 自动溢流存入进行中（回执到达时据此判断是否继续发下一个箱子）。 */
     private boolean depositOverflowInFlight;
 
+    // ============ [CHANGED] 会话 #12：屏幕空间文字重画 ============
+    /**
+     * 文字层级：MAIN 主界面（z=0）、TOP 弹窗/右键菜单（z=400）。
+     * 缩放矩阵内字形落在分数像素被线性采样 → 模糊；故几何仍在矩阵内绘制，
+     * 全部文字改为记录到 {@link #pendingText}，在 endScaledRender 之后以整数屏幕坐标重放。
+     */
+    private enum TextLayer { MAIN, TOP }
+
+    private record TextDraw(TextLayer layer, String text, int x, int y, int color, boolean shadow) {
+    }
+
+    /** 待重放的文字（每帧 render 开头清空）。 */
+    private final java.util.List<TextDraw> pendingText = new java.util.ArrayList<>(64);
+
+    /** 局部坐标 → 屏幕整数坐标（与 beginScaledRender 取整后的原点一致）。 */
+    private int screenX(int localX) {
+        return Math.round(this.scaledOriginX + localX * this.uiScale);
+    }
+
+    private int screenY(int localY) {
+        return Math.round(this.scaledOriginY + localY * this.uiScale);
+    }
+
+    /** 记录一条待重放文字（带阴影）。 */
+    private void recordText(TextLayer layer, String text, int x, int y, int color) {
+        recordText(layer, text, x, y, color, true);
+    }
+
+    /** 记录一条待重放文字。 */
+    private void recordText(TextLayer layer, String text, int x, int y, int color, boolean shadow) {
+        pendingText.add(new TextDraw(layer, text, x, y, color, shadow));
+    }
+
+    /** 记录按钮文字：排版公式与 PeStyle.button 同源（避免复制 enabled 取色逻辑）。 */
+    private void recordButton(TextLayer layer, String label, boolean enabled,
+            int x, int y, int w, int h) {
+        PeStyle.ButtonText bt = PeStyle.buttonText(this.font, label, enabled, x, y, w, h);
+        recordText(layer, bt.label(), bt.textX(), bt.textY(), bt.color());
+    }
+
+    /** 记录分段按钮文字：排版公式与 PeStyle.segmented 同源。 */
+    private void recordSegmented(TextLayer layer, String label, boolean selected,
+            int x, int y, int w, int h) {
+        PeStyle.SegmentedText st = PeStyle.segmentedText(this.font, label, selected, x, y, w, h);
+        recordText(layer, st.label(), st.textX(), st.textY(), st.color());
+    }
+
+    /** 矩阵外重放：以整数屏幕坐标画某一层全部文字。 */
+    private void drawPendingText(GuiGraphics g, TextLayer layer) {
+        for (TextDraw d : pendingText) {
+            if (d.layer() != layer) {
+                continue;
+            }
+            g.drawString(this.font, d.text(), screenX(d.x()), screenY(d.y()), d.color(), d.shadow());
+        }
+    }
+
     private record ContextMenu(int x, int y, StorageItemSlot slot, StorageId storageId) {
     }
 
@@ -272,8 +329,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         int imageWidth = this.layout.width();
         int imageHeight = this.layout.height();
         this.uiScale = UiScaling.fitScale(windowWidth, windowHeight, imageWidth, imageHeight);
-        this.scaledOriginX = (windowWidth - imageWidth * this.uiScale) / 2f;
-        this.scaledOriginY = (windowHeight - imageHeight * this.uiScale) / 2f;
+        // [CHANGED] 会话 #12：origin 取整，避免奇数窗口尺寸时 .5 像素平移导致字形落在
+        // 分数像素被线性采样而模糊；与 screenX/screenY 共用同一整数值，1.0 档下逐像素对齐。
+        this.scaledOriginX = Math.round((windowWidth - imageWidth * this.uiScale) / 2f);
+        this.scaledOriginY = Math.round((windowHeight - imageHeight * this.uiScale) / 2f);
         var pose = g.pose();
         pose.pushPose();
         pose.translate(this.scaledOriginX, this.scaledOriginY, 0);
@@ -1903,6 +1962,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     @Override
     public void render(GuiGraphics g, int mx, int my, float partialTick) {
         syncEditBoxPositions();
+        pendingText.clear(); // [CHANGED] 会话 #12：每帧重置文字重放队列
         long now = System.currentTimeMillis();
         if (now - lastStorageRefreshTime > 10000) {
             lastStorageRefreshTime = now;
@@ -1933,6 +1993,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         // 会覆盖这里的 disableDepthTest，导致弹窗背景在 z=0 被物品深度剔除、只有无深度测试的
         // 文字悬浮在下层内容上（表现为“图层优先级低、弹窗被交易列表/钱包/页数穿透”）。
         // 修复：把弹窗整体提升到 z=400（深度≈0.48，近于一切下层元素），LEQUAL 通过即盖住。
+        // [CHANGED] 会话 #12：背景几何仍在矩阵内 z=400 绘制，文字改 recordText(TOP)，
+        // 在 endScaledRender 后以屏幕空间整数坐标 + 同款 z=400 提升重放。
         if (sellPreview != null) {
             g.flush();
             com.mojang.blaze3d.systems.RenderSystem.disableDepthTest();
@@ -1953,12 +2015,28 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         g.pose().popPose();
         g.flush();
         com.mojang.blaze3d.systems.RenderSystem.enableDepthTest();
+        endScaledRender(g);
+
+        // [CHANGED] 会话 #12：矩阵外屏幕空间文字重画（整数坐标，根治缩放模糊）。
+        // MAIN 文字在 z=0 重放：在弹窗区域（z=400 深度≈0.48）被 LEQUAL cull，
+        // 主界面文字不透出弹窗，与矩阵内行为一致。
+        drawPendingText(g, TextLayer.MAIN);
+        // TOP 文字（弹窗/右键菜单）以 z=400 + disableDepthTest 重放，晚画覆盖弹窗背景。
+        if (sellPreview != null || contextMenu != null) {
+            g.flush();
+            com.mojang.blaze3d.systems.RenderSystem.disableDepthTest();
+            g.pose().pushPose();
+            g.pose().translate(0.0F, 0.0F, 400.0F);
+            drawPendingText(g, TextLayer.TOP);
+            g.pose().popPose();
+            g.flush();
+            com.mojang.blaze3d.systems.RenderSystem.enableDepthTest();
+        }
         // [CHANGED] Bug D 修复：基类 AbstractContainerScreen.render 不调用 renderTooltip，
         // 容器子类必须显式调用，否则背包/仓储物品悬停提示不显示。
-        // 必须在 endScaledRender 前用缩放局部坐标调用，使自定义悬停检测与
-        // 基类 hoveredSlot（super.render 以 lmx/lmy 更新）在缩放矩阵下保持一致。
-        this.renderTooltip(g, lmx, lmy);
-        endScaledRender(g);
+        // [CHANGED] 会话 #12：移到 endScaledRender 之后并传屏幕坐标 mx/my——
+        // tooltip 在矩阵外以整数坐标清晰绘制；方法内以 toLocalX/Y 换算命中（结果与现状恒等）。
+        this.renderTooltip(g, mx, my);
     }
 
     @Override
@@ -2005,7 +2083,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             String none = this.font.plainSubstrByWidth(
                     t("poketrade.exchange.search.none"),
                     Math.max(16, layout.catalogGrid().width() - 4));
-            g.drawString(this.font, none,
+            recordText(TextLayer.MAIN, none,
                     layout.catalogGrid().x()
                             + (layout.catalogGrid().width() - this.font.width(none)) / 2,
                     layout.catalogGrid().y() + layout.catalogGrid().height() / 2 - 4,
@@ -2016,7 +2094,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 visibleCatalog.size(), gridCols * ExchangeUiModel.Layout.GRID_ROWS);
         String pageText = t("poketrade.exchange.catalog.page",
                 catalogScroll + 1, Math.max(1, catalogPages));
-        g.drawString(this.font, pageText,
+        recordText(TextLayer.MAIN, pageText,
                 layout.pageText().x(), layout.pageText().y(), PeStyle.TEXT_DIM);
         if (!rightCollapsed) {
             PeStyle.inset(g, layout.cartGrid().x(), layout.cartGrid().y(),
@@ -2067,6 +2145,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         int x = mx - leftPos, y = my - topPos;
         boolean hovered;
         // 搜索框空且未聚焦时显示提示文字
+        // [CHANGED] 会话 #12：hint 与 EditBox 内部文字同尺寸，随矩阵缩放（取舍见开发日志）
         if (searchBox != null && searchBox.getValue().isEmpty() && !searchBox.isFocused()) {
             g.drawString(this.font, this.font.plainSubstrByWidth(
                             t("poketrade.exchange.search.hint"),
@@ -2074,16 +2153,22 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     layout.search().x() + 3, layout.search().y() + 3, PeStyle.TEXT_DIM);
         }
         // 中栏商品分页：‹ / ›
-        PeStyle.button(g, this.font, layout.pagePrev().x(), layout.pagePrev().y(),
+        PeStyle.buttonBg(g, layout.pagePrev().x(), layout.pagePrev().y(),
                 layout.pagePrev().width(), layout.pagePrev().height(),
-                "‹", true, false, layout.pagePrev().contains(x, y), mx, my);
-        PeStyle.button(g, this.font, layout.pageNext().x(), layout.pageNext().y(),
+                true, false, layout.pagePrev().contains(x, y), mx, my);
+        recordButton(TextLayer.MAIN, "‹", true,
+                layout.pagePrev().x(), layout.pagePrev().y(),
+                layout.pagePrev().width(), layout.pagePrev().height());
+        PeStyle.buttonBg(g, layout.pageNext().x(), layout.pageNext().y(),
                 layout.pageNext().width(), layout.pageNext().height(),
-                "›", true, false, layout.pageNext().contains(x, y), mx, my);
+                true, false, layout.pageNext().contains(x, y), mx, my);
+        recordButton(TextLayer.MAIN, "›", true,
+                layout.pageNext().x(), layout.pageNext().y(),
+                layout.pageNext().width(), layout.pageNext().height());
         // 中栏钱包（完整整数金额，位于存入格右侧）
         long bal = menu.getBalance();
         String balStr = t("poketrade.exchange.balance") + " " + ExchangeUiModel.formatAmount(bal);
-        g.drawString(this.font, this.font.plainSubstrByWidth(balStr,
+        recordText(TextLayer.MAIN, this.font.plainSubstrByWidth(balStr,
                         Math.max(16, layout.wallet().width() - 2)),
                 layout.wallet().x(), layout.wallet().y(),
                 bal > 0 ? PeStyle.TEXT_OK : PeStyle.TEXT_DIM);
@@ -2102,7 +2187,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             String priceText = displayNameOf(hoveredEntry.itemId()) + " 买 "
                     + ExchangeUiModel.formatAmount(hoveredEntry.buyPrice()) + " 卖 "
                     + ExchangeUiModel.formatAmount(hoveredEntry.sellPrice());
-            g.drawString(this.font, this.font.plainSubstrByWidth(priceText,
+            recordText(TextLayer.MAIN, this.font.plainSubstrByWidth(priceText,
                             Math.max(16, layout.priceHint().width() - 2)),
                     layout.priceHint().x(), layout.priceHint().y(), PeStyle.TEXT_TITLE);
         }
@@ -2111,24 +2196,33 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             String clearLabel = this.font.plainSubstrByWidth(t("poketrade.exchange.cart.clear_all"),
                     Math.max(8, ccw - 2));
             hovered = layout.cartClear().contains(x, y);
-            PeStyle.button(g, this.font, layout.cartClear().x(), layout.cartClear().y(),
-                    ccw, layout.cartClear().height(), clearLabel,
+            PeStyle.buttonBg(g, layout.cartClear().x(), layout.cartClear().y(),
+                    ccw, layout.cartClear().height(),
                     !cart.isEmpty() && !workflow.pending(), false, hovered, mx, my);
+            recordButton(TextLayer.MAIN, clearLabel,
+                    !cart.isEmpty() && !workflow.pending(),
+                    layout.cartClear().x(), layout.cartClear().y(), ccw, layout.cartClear().height());
             int csw = layout.cartSell().width();
             String cartSellLabel = this.font.plainSubstrByWidth(
                     t("poketrade.exchange.sell.cart"), Math.max(8, csw - 2));
             hovered = layout.cartSell().contains(x, y);
-            PeStyle.button(g, this.font, layout.cartSell().x(), layout.cartSell().y(),
-                    csw, layout.cartSell().height(), cartSellLabel,
+            PeStyle.buttonBg(g, layout.cartSell().x(), layout.cartSell().y(),
+                    csw, layout.cartSell().height(),
                     (!sellQueue.isEmpty() || sellEnabled) && !workflow.pending(), false, hovered, mx, my);
+            recordButton(TextLayer.MAIN, cartSellLabel,
+                    (!sellQueue.isEmpty() || sellEnabled) && !workflow.pending(),
+                    layout.cartSell().x(), layout.cartSell().y(), csw, layout.cartSell().height());
             // 一键买入：紧贴一键出售下方，购物车非空且买入未停用时可用
             int cbw = layout.cartBuy().width();
             String cartBuyLabel = this.font.plainSubstrByWidth(
                     t("poketrade.exchange.buy.cart"), Math.max(8, cbw - 2));
             hovered = layout.cartBuy().contains(x, y);
-            PeStyle.button(g, this.font, layout.cartBuy().x(), layout.cartBuy().y(),
-                    cbw, layout.cartBuy().height(), cartBuyLabel,
+            PeStyle.buttonBg(g, layout.cartBuy().x(), layout.cartBuy().y(),
+                    cbw, layout.cartBuy().height(),
                     !cart.isEmpty() && buyEnabled && !workflow.pending(), false, hovered, mx, my);
+            recordButton(TextLayer.MAIN, cartBuyLabel,
+                    !cart.isEmpty() && buyEnabled && !workflow.pending(),
+                    layout.cartBuy().x(), layout.cartBuy().y(), cbw, layout.cartBuy().height());
         }
         // 购物车数量控制（右栏操作区，选中格时）
         boolean qtyActive = !rightCollapsed && selectedCart >= 0 && selectedCart < cart.size();
@@ -2142,30 +2236,34 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     layout.qtyOne(), layout.qtyHalf(), layout.qtyStack(), layout.qtyClear()};
             for (int i = 0; i < 4; i++) {
                 ExchangeUiModel.Rect r = rects[i];
-                PeStyle.button(g, this.font, r.x(), r.y(), r.width(), r.height(),
-                        labels[i], true, false, r.contains(x, y), mx, my);
+                PeStyle.buttonBg(g, r.x(), r.y(), r.width(), r.height(),
+                        true, false, r.contains(x, y), mx, my);
+                recordButton(TextLayer.MAIN, labels[i], true,
+                        r.x(), r.y(), r.width(), r.height());
             }
-            PeStyle.button(g, this.font, layout.quantityApply().x(), layout.quantityApply().y(),
+            PeStyle.buttonBg(g, layout.quantityApply().x(), layout.quantityApply().y(),
                     layout.quantityApply().width(), layout.quantityApply().height(),
-                    t("poketrade.exchange.cart.apply"), true, false,
-                    layout.quantityApply().contains(x, y), mx, my);
+                    true, false, layout.quantityApply().contains(x, y), mx, my);
+            recordButton(TextLayer.MAIN, t("poketrade.exchange.cart.apply"), true,
+                    layout.quantityApply().x(), layout.quantityApply().y(),
+                    layout.quantityApply().width(), layout.quantityApply().height());
         } else if (!rightCollapsed) {
             String hint = this.font.plainSubstrByWidth(t("poketrade.exchange.cart.hint"),
                     Math.max(16, 132 - 4));
-            g.drawString(this.font, hint, layout.qtyOne().x(),
+            recordText(TextLayer.MAIN, hint, layout.qtyOne().x(),
                     layout.qtyOne().y() + 2, PeStyle.TEXT_DIM);
         }
         if (!rightCollapsed) {
             int rw = Math.max(16, layout.cartCapacity().width() - 2);
             String capStr = t("poketrade.exchange.cart.capacity", cart.size(), 27);
-            g.drawString(this.font, this.font.plainSubstrByWidth(capStr, rw),
+            recordText(TextLayer.MAIN, this.font.plainSubstrByWidth(capStr, rw),
                     layout.cartCapacity().x(), layout.cartCapacity().y(), PeStyle.TEXT_DIM);
             String itemsStr = t("poketrade.exchange.cart.items", cart.totalItems());
-            g.drawString(this.font, this.font.plainSubstrByWidth(itemsStr, rw),
+            recordText(TextLayer.MAIN, this.font.plainSubstrByWidth(itemsStr, rw),
                     layout.cartItems().x(), layout.cartItems().y(), PeStyle.TEXT_DIM);
             String totalStr = t("poketrade.exchange.cart.total") + " "
                     + ExchangeUiModel.formatAmount(cartTotalCost());
-            g.drawString(this.font, this.font.plainSubstrByWidth(totalStr, rw),
+            recordText(TextLayer.MAIN, this.font.plainSubstrByWidth(totalStr, rw),
                     layout.cartTotal().x(), layout.cartTotal().y(), PeStyle.TEXT_TITLE);
         }
         quantityBox.setVisible(qtyActive);
@@ -2176,7 +2274,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (!workflow.messageKey().isEmpty()) {
             int w = Math.max(24, layout.middle().width() - 4);
             String msg = this.font.plainSubstrByWidth(t(workflow.messageKey()), w);
-            g.drawString(this.font, msg, layout.middle().x(), layout.height() - 8,
+            recordText(TextLayer.MAIN, msg, layout.middle().x(), layout.height() - 8,
                     lastResult == TradeResult.SUCCESS ? PeStyle.TEXT_OK : PeStyle.TEXT_ERROR);
         }
         // 左栏：仓储列表 + 快照 + 半径/筛选 + 出售按钮
@@ -2190,22 +2288,28 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             int msgY = layout.height() - 8;
             int maxW = Math.max(24, layout.middle().x() - msgX);
             String msg = this.font.plainSubstrByWidth(sellMessage, maxW);
-            g.drawString(this.font, msg, msgX, msgY, sellMessageColor);
+            recordText(TextLayer.MAIN, msg, msgX, msgY, sellMessageColor);
         }
         // 收起/展开按钮
         String leftBtn = leftCollapsed ? "▸" : "◂";
-        PeStyle.button(g, this.font, layout.collapseLeft().x(), layout.collapseLeft().y(),
+        PeStyle.buttonBg(g, layout.collapseLeft().x(), layout.collapseLeft().y(),
                 layout.collapseLeft().width(), layout.collapseLeft().height(),
-                leftBtn, true, false, layout.collapseLeft().contains(x, y), mx, my);
+                true, false, layout.collapseLeft().contains(x, y), mx, my);
+        recordButton(TextLayer.MAIN, leftBtn, true,
+                layout.collapseLeft().x(), layout.collapseLeft().y(),
+                layout.collapseLeft().width(), layout.collapseLeft().height());
         String rightBtn = rightCollapsed ? "◂" : "▸";
-        PeStyle.button(g, this.font, layout.collapseRight().x(), layout.collapseRight().y(),
+        PeStyle.buttonBg(g, layout.collapseRight().x(), layout.collapseRight().y(),
                 layout.collapseRight().width(), layout.collapseRight().height(),
-                rightBtn, true, false, layout.collapseRight().contains(x, y), mx, my);
+                true, false, layout.collapseRight().contains(x, y), mx, my);
+        recordButton(TextLayer.MAIN, rightBtn, true,
+                layout.collapseRight().x(), layout.collapseRight().y(),
+                layout.collapseRight().width(), layout.collapseRight().height());
         // 原版容器标题：左栏展开时位于左栏顶部(8,7)；左栏收起时搜索框占满顶行，隐藏
         if (!leftCollapsed) {
             String tLabel = this.font.plainSubstrByWidth(this.title.getString(),
                     Math.max(16, 132 - 10));
-            g.drawString(this.font, Component.literal(tLabel),
+            recordText(TextLayer.MAIN, tLabel,
                     this.titleLabelX, this.titleLabelY, 0x404040, false);
         }
         // 不绘制“物品栏”标签：其位置（y=156）与底部按钮行（y=154..166）重叠，
@@ -2220,7 +2324,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         PeStyle.windowFrame(g, modal.x(), modal.y(), modal.width(), modal.height());
     }
 
-    /** 出售预览模态标签/按钮——在 renderLabels 内绘制，位于最顶层。 */
+    /**
+     * 出售预览模态标签/按钮——[CHANGED] 会话 #12：背景几何在矩阵内 z=400 绘制，
+     * 文字全部改 recordText(TOP)，在 endScaledRender 后以屏幕空间整数坐标 + z=400 重放。
+     */
     private void renderSellPreviewLabels(GuiGraphics g, int mouseX, int mouseY) {
         ExchangeUiModel.Rect modal = layout.previewModal();
         ExchangeUiModel.Rect lines = layout.previewLines();
@@ -2228,15 +2335,15 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         int w = modal.width();
         int textWidth = Math.max(32, w - 20);
         String title = this.font.plainSubstrByWidth(t("poketrade.exchange.sell.preview.title"), textWidth);
-        g.drawString(this.font, title, modal.x() + 6, modal.y() + 6, PeStyle.TEXT_TITLE);
+        recordText(TextLayer.TOP, title, modal.x() + 6, modal.y() + 6, PeStyle.TEXT_TITLE);
         // 来源行
         String sourceKey = sellPreview.source() == ExchangeUiModel.SellSource.INVENTORY
                 ? "poketrade.exchange.sell.preview.source.inventory"
                 : "poketrade.exchange.sell.preview.source.storage";
-        g.drawString(this.font, this.font.plainSubstrByWidth(t(sourceKey), textWidth),
+        recordText(TextLayer.TOP, this.font.plainSubstrByWidth(t(sourceKey), textWidth),
                 modal.x() + 6, modal.y() + 16, PeStyle.TEXT_DIM);
         if (sellPreview.source() == ExchangeUiModel.SellSource.INVENTORY) {
-            g.drawString(this.font, this.font.plainSubstrByWidth(
+            recordText(TextLayer.TOP, this.font.plainSubstrByWidth(
                             t("poketrade.exchange.sell.preview.single"), textWidth),
                     modal.x() + 6, modal.y() + 26, PeStyle.TEXT_DIM);
         }
@@ -2249,27 +2356,36 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     : Long.toString(storagePreview.revision());
             String info = t("poketrade.exchange.sell.preview.storage_info",
                     storagePreview.storageName(), storagePreview.storageId(), perm, revision);
-            g.drawString(this.font, this.font.plainSubstrByWidth(info, textWidth),
+            recordText(TextLayer.TOP, this.font.plainSubstrByWidth(info, textWidth),
                     modal.x() + 6, modal.y() + 26, PeStyle.TEXT_DIM);
         }
-        // 可滚动条目列表
+        // [CHANGED] 会话 #12 问题 A：可滚动条目列表——价格右对齐到弹窗右缘，名称整行动态截断。
+        // 旧实现价格左对齐固定 x=modal.right()-24，千分位多位时溢出右边界；名称截断又不含
+        // ×数量 后缀。新实现：subtotal 完整千分位（仅超可用宽度才截断兜底），priceX 右锚定
+        // （几何来自 ExchangeUiModel.previewRowLayout 纯函数，便于测试）；名称整行
+        // （名称 ×数量）截断到 priceX-6，两者永不重叠，短价格时名称可延展更宽。
         int pageStart = previewPage * ExchangeUiModel.Layout.PREVIEW_ROWS;
         for (int i = 0; i < ExchangeUiModel.Layout.PREVIEW_ROWS; i++) {
             int idx = pageStart + i;
             if (idx >= sellPreview.lines().size()) break;
             ExchangeUiModel.PreviewLine line = sellPreview.lines().get(idx);
-            String name = this.font.plainSubstrByWidth(line.displayName(), Math.max(8, textWidth - 74));
-            g.drawString(this.font, t("poketrade.exchange.sell.preview.line", name, line.count()),
+            String subtotal = this.font.plainSubstrByWidth(
+                    ExchangeUiModel.formatAmount(line.subtotal()),
+                    Math.max(24, modal.right() - 24 - lines.x()));
+            ExchangeUiModel.PreviewRowLayout rowLayout =
+                    ExchangeUiModel.previewRowLayout(modal, lines, this.font.width(subtotal));
+            String lineText = this.font.plainSubstrByWidth(
+                    t("poketrade.exchange.sell.preview.line", line.displayName(), line.count()),
+                    rowLayout.nameMax());
+            recordText(TextLayer.TOP, lineText,
                     lines.x(), lines.y() + i * 11, PeStyle.TEXT_DIM);
-            String subtotal = this.font.plainSubstrByWidth(ExchangeUiModel.formatAmount(line.subtotal()),
-                    Math.max(24, modal.right() - lines.x() - 24));
-            g.drawString(this.font, subtotal, modal.right() - 24,
-                    lines.y() + i * 11, PeStyle.TEXT_TITLE);
+            recordText(TextLayer.TOP, subtotal,
+                    rowLayout.priceX(), lines.y() + i * 11, PeStyle.TEXT_TITLE);
         }
         // 总计
         String total = t("poketrade.exchange.sell.preview.total") + " "
                 + ExchangeUiModel.formatAmount(sellPreview.total());
-        g.drawString(this.font, this.font.plainSubstrByWidth(total, textWidth),
+        recordText(TextLayer.TOP, this.font.plainSubstrByWidth(total, textWidth),
                 modal.x() + 6, modal.y() + 112, PeStyle.TEXT_TITLE);
         // 跳过原因
         StringBuilder skipNote = new StringBuilder();
@@ -2282,14 +2398,17 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             skipNote.append(t("poketrade.exchange.sell.truncated"));
         }
         if (skipNote.length() > 0) {
-            g.drawString(this.font, this.font.plainSubstrByWidth(skipNote.toString(), textWidth),
+            recordText(TextLayer.TOP, this.font.plainSubstrByWidth(skipNote.toString(), textWidth),
                     modal.x() + 6, modal.y() + 121, PeStyle.TEXT_DIM);
         }
-        // 取消 / 确认按钮
+        // 取消 / 确认按钮（背景几何 + TOP 文字）
         boolean cancelHover = layout.previewCancel().contains(x, y);
-        PeStyle.button(g, this.font, layout.previewCancel().x(), layout.previewCancel().y(),
+        PeStyle.buttonBg(g, layout.previewCancel().x(), layout.previewCancel().y(),
                 layout.previewCancel().width(), layout.previewCancel().height(),
-                t("poketrade.exchange.cancel"), !workflow.pending(), false, cancelHover, mouseX, mouseY);
+                !workflow.pending(), false, cancelHover, mouseX, mouseY);
+        recordButton(TextLayer.TOP, t("poketrade.exchange.cancel"), !workflow.pending(),
+                layout.previewCancel().x(), layout.previewCancel().y(),
+                layout.previewCancel().width(), layout.previewCancel().height());
         boolean confirmEnabled = !workflow.pending()
                 && (sellPreview.source() == ExchangeUiModel.SellSource.INVENTORY
                 || storagePreview == null || storagePreview.canConfirm());
@@ -2298,9 +2417,12 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         String confirmLabel = this.font.plainSubstrByWidth(t(confirmKey),
                 Math.max(12, layout.previewConfirm().width() - 2));
         boolean confirmHover = layout.previewConfirm().contains(x, y);
-        PeStyle.button(g, this.font, layout.previewConfirm().x(), layout.previewConfirm().y(),
+        PeStyle.buttonBg(g, layout.previewConfirm().x(), layout.previewConfirm().y(),
                 layout.previewConfirm().width(), layout.previewConfirm().height(),
-                confirmLabel, confirmEnabled, false, confirmHover, mouseX, mouseY);
+                confirmEnabled, false, confirmHover, mouseX, mouseY);
+        recordButton(TextLayer.TOP, confirmLabel, confirmEnabled,
+                layout.previewConfirm().x(), layout.previewConfirm().y(),
+                layout.previewConfirm().width(), layout.previewConfirm().height());
     }
 
     private ExchangeUiModel.Rect contextMenuRect() {
@@ -2330,7 +2452,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             if (hovered) {
                 g.fill(rect.x() + 1, rowY, rect.right() - 1, rowY + 12, 0x408B6B1B);
             }
-            g.drawString(this.font, labels[i], rect.x() + 4, rowY + 2, PeStyle.TEXT);
+            recordText(TextLayer.TOP, labels[i], rect.x() + 4, rowY + 2, PeStyle.TEXT);
         }
     }
 
@@ -2386,7 +2508,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     /** 指针物品 tooltip：名称/类别/来源模组/买价/卖价。 */
     @Override
     protected void renderTooltip(GuiGraphics g, int mouseX, int mouseY) {
-        int x = mouseX - leftPos, y = mouseY - topPos;
+        // [CHANGED] 会话 #12：矩阵外传入屏幕坐标 mx/my，命中换算回局部坐标
+        // （toLocalX(mx) 与原 lmx 恒等，结果与现状一致）；g.renderTooltip 在矩阵外
+        // 以屏幕坐标绘制 → tooltip 文字像素级清晰。
+        int x = toLocalX(mouseX), y = toLocalY(mouseY);
         if (sellPreview != null) {
             // 弹窗打开时禁止下层目录/购物车/仓储的悬停提示，避免提示浮在弹窗之上
             return;
@@ -2528,13 +2653,16 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     /** 左栏内容：仓储列表 + 选中仓储快照槽位（渲染在 translate 内，用相对坐标）。 */
     private void renderLeftPanel(GuiGraphics g, int x, int y) {
         // 范围行：标签 + 点击切换按钮（显示当前档位；selected 高亮表示当前生效值）
-        g.drawString(this.font, t("poketrade.gui.range"),
+        recordText(TextLayer.MAIN, t("poketrade.gui.range"),
                 layout.left().x() + 2, layout.radiusInput().y() + 2, PeStyle.TEXT);
         ExchangeUiModel.Rect radiusCtrl = layout.radiusInput();
-        PeStyle.segmented(g, this.font, radiusCtrl.x(), radiusCtrl.y(),
+        PeStyle.segmentedBg(g, radiusCtrl.x(), radiusCtrl.y(),
                 radiusCtrl.width(), radiusCtrl.height(),
-                String.valueOf(storage.getRadius()), true, false, 0, 0);
+                true, false, 0, 0);
+        recordSegmented(TextLayer.MAIN, String.valueOf(storage.getRadius()), true,
+                radiusCtrl.x(), radiusCtrl.y(), radiusCtrl.width(), radiusCtrl.height());
         // 物品搜索提示
+        // [CHANGED] 会话 #12：hint 与 storageSearchBox 内部文字同尺寸，随矩阵缩放（取舍见开发日志）
         if (storageSearchBox != null && storageSearchBox.getValue().isEmpty()
                 && !storageSearchBox.isFocused()) {
             g.drawString(this.font, this.font.plainSubstrByWidth(
@@ -2549,35 +2677,51 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 : categoryLabel(categories.get(slotCategoryIndex)).getString());
         catLabel = this.font.plainSubstrByWidth(catLabel,
                 Math.max(8, layout.slotCategory().width() - 2));
-        PeStyle.button(g, this.font, layout.slotCategory().x(), layout.slotCategory().y(),
+        PeStyle.buttonBg(g, layout.slotCategory().x(), layout.slotCategory().y(),
                 layout.slotCategory().width(), layout.slotCategory().height(),
-                catLabel, true, false, layout.slotCategory().contains(x, y),
+                true, false, layout.slotCategory().contains(x, y),
                 this.leftPos + x, this.topPos + y);
+        recordButton(TextLayer.MAIN, catLabel, true,
+                layout.slotCategory().x(), layout.slotCategory().y(),
+                layout.slotCategory().width(), layout.slotCategory().height());
         boolean sellFiltered = storage.getFilterMode() == StorageViewModel.FilterMode.SELL;
-        PeStyle.button(g, this.font, layout.filterSell().x(), layout.filterSell().y(),
+        PeStyle.buttonBg(g, layout.filterSell().x(), layout.filterSell().y(),
                 layout.filterSell().width(), layout.filterSell().height(),
-                t(sellFiltered ? "poketrade.exchange.filter.sellable" : "poketrade.exchange.filter.all"),
                 true, sellFiltered, layout.filterSell().contains(x, y),
                 this.leftPos + x, this.topPos + y);
+        recordButton(TextLayer.MAIN,
+                t(sellFiltered ? "poketrade.exchange.filter.sellable" : "poketrade.exchange.filter.all"),
+                true,
+                layout.filterSell().x(), layout.filterSell().y(),
+                layout.filterSell().width(), layout.filterSell().height());
         // 仓储手风琴：每个箱子一行，展开显示全部格子（按面板宽度 7 列，超 3 行滚动）
         for (AccordionEntry entry : accordionEntries()) {
             renderAccordionEntry(g, entry, x, y);
         }
         // 出售区按钮（刷新 / 清空待售 / 存入；批量出售已移到购物车）
-        PeStyle.button(g, this.font, layout.storageRefresh().x(), layout.storageRefresh().y(),
+        PeStyle.buttonBg(g, layout.storageRefresh().x(), layout.storageRefresh().y(),
                 layout.storageRefresh().width(), layout.storageRefresh().height(),
-                t("poketrade.exchange.refresh"), !workflow.pending(), false,
+                !workflow.pending(), false,
                 layout.storageRefresh().contains(x, y), this.leftPos + x, this.topPos + y);
-        PeStyle.button(g, this.font, layout.storageClear().x(), layout.storageClear().y(),
+        recordButton(TextLayer.MAIN, t("poketrade.exchange.refresh"), !workflow.pending(),
+                layout.storageRefresh().x(), layout.storageRefresh().y(),
+                layout.storageRefresh().width(), layout.storageRefresh().height());
+        PeStyle.buttonBg(g, layout.storageClear().x(), layout.storageClear().y(),
                 layout.storageClear().width(), layout.storageClear().height(),
-                t("poketrade.exchange.cart.clear"), !sellQueue.isEmpty(), false,
+                !sellQueue.isEmpty(), false,
                 layout.storageClear().contains(x, y), this.leftPos + x, this.topPos + y);
+        recordButton(TextLayer.MAIN, t("poketrade.exchange.cart.clear"), !sellQueue.isEmpty(),
+                layout.storageClear().x(), layout.storageClear().y(),
+                layout.storageClear().width(), layout.storageClear().height());
         boolean depositEnabled = storage.getSelectedStorageId() != null
                 && storage.hasPermission(StoragePermission.DEPOSIT) && !workflow.pending();
-        PeStyle.button(g, this.font, layout.storageDeposit().x(), layout.storageDeposit().y(),
+        PeStyle.buttonBg(g, layout.storageDeposit().x(), layout.storageDeposit().y(),
                 layout.storageDeposit().width(), layout.storageDeposit().height(),
-                t("poketrade.exchange.deposit"), depositEnabled, false,
+                depositEnabled, false,
                 layout.storageDeposit().contains(x, y), this.leftPos + x, this.topPos + y);
+        recordButton(TextLayer.MAIN, t("poketrade.exchange.deposit"), depositEnabled,
+                layout.storageDeposit().x(), layout.storageDeposit().y(),
+                layout.storageDeposit().width(), layout.storageDeposit().height());
     }
 
     private void renderAccordionEntry(GuiGraphics g, AccordionEntry entry, int x, int y) {
@@ -2593,17 +2737,19 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         int tx = header.x() + 2;
         if (ender) {
             g.fill(tx, header.y() + 2, tx + 8, header.y() + 10, 0xFF1A1A24);
-            g.drawString(this.font, "末", tx + 1, header.y() + 2, 0xFFA98BD6);
+            recordText(TextLayer.MAIN, "末", tx + 1, header.y() + 2, 0xFFA98BD6);
             tx += 10;
         }
         String rowText = this.font.plainSubstrByWidth(name,
                 Math.max(16, header.width() - 20 - (tx - header.x())));
-        g.drawString(this.font, rowText, tx, header.y() + 2, PeStyle.TEXT_TITLE);
+        recordText(TextLayer.MAIN, rowText, tx, header.y() + 2, PeStyle.TEXT_TITLE);
         // 展开/收起按钮（表头右侧）
         String arrow = entry.expanded() ? "▾" : "▸";
-        PeStyle.button(g, this.font, header.right() - 15, header.y() + 1, 13, 10,
-                arrow, true, false, header.contains(x, y) && x >= header.right() - 15,
+        PeStyle.buttonBg(g, header.right() - 15, header.y() + 1, 13, 10,
+                true, false, header.contains(x, y) && x >= header.right() - 15,
                 this.leftPos + x, this.topPos + y);
+        recordButton(TextLayer.MAIN, arrow, true,
+                header.right() - 15, header.y() + 1, 13, 10);
         if (!entry.expanded()) {
             return;
         }
@@ -2641,7 +2787,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         PeStyle.scrollbar(g, grid.right() + 1, grid.y(), grid.height(),
                 totalRows, visibleRows, scroll);
         if (slots.isEmpty()) {
-            g.drawString(this.font, t("poketrade.gui.empty"),
+            recordText(TextLayer.MAIN, t("poketrade.gui.empty"),
                     grid.x() + 2, grid.y() + 8, PeStyle.TEXT_DIM);
         }
     }

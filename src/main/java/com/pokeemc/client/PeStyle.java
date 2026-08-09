@@ -197,4 +197,85 @@ public final class PeStyle {
     public static void text(GuiGraphics g, Font font, String s, int x, int y, int color) {
         g.drawString(font, s, x, y, color);
     }
+
+    // ================= 屏幕空间文字重画配套（会话 #12 新增） =================
+
+    /**
+     * 按钮文字排版数据：label 已按可用宽度截断，textX/textY 为居中后的局部坐标，
+     * color 依 enabled 取色。与 {@link #button} 内部公式逐字一致，避免复制取色逻辑。
+     */
+    public record ButtonText(String label, int textX, int textY, int color) {
+    }
+
+    /** 分段按钮文字排版数据（同 {@link ButtonText}，selected 用白字）。 */
+    public record SegmentedText(String label, int textX, int textY, int color) {
+    }
+
+    /**
+     * 按钮背景（凸起/按下/悬停）+ 命中检测；不绘制文字。
+     * 供「几何矩阵内、文字矩阵外」的屏幕空间重画拆分使用：文字由
+     * {@link #buttonText} 排版后由调用方另行以屏幕坐标绘制。
+     */
+    public static boolean buttonBg(
+            GuiGraphics g, int x, int y, int w, int h,
+            boolean enabled, boolean pressed, boolean hovered, int mx, int my) {
+        int fill = enabled ? (hovered ? 0xFFD8D8D8 : 0xFFC6C6C6) : 0xFFB4B4B4;
+        g.fill(x, y, x + w, y + h, fill);
+        if (pressed) {
+            g.fill(x, y, x + w, y + 1, SHADOW);
+            g.fill(x, y, x + 1, y + h, SHADOW);
+            g.fill(x, y + h - 1, x + w, y + h, HILIGHT);
+            g.fill(x + w - 1, y, x + w, y + h, HILIGHT);
+        } else {
+            g.fill(x, y, x + w, y + 1, HILIGHT);
+            g.fill(x, y, x + 1, y + h, HILIGHT);
+            g.fill(x, y + h - 1, x + w, y + h, SHADOW);
+            g.fill(x + w - 1, y, x + w, y + h, SHADOW);
+        }
+        return mx >= x && mx < x + w && my >= y && my < y + h;
+    }
+
+    /** 按钮文字排版（与 {@link #button} 内部公式一致）：label 截断 + 居中坐标 + enabled 取色。 */
+    public static ButtonText buttonText(Font font, String label, boolean enabled,
+            int x, int y, int w, int h) {
+        String safeLabel = label == null ? "" : font.plainSubstrByWidth(label, Math.max(4, w - 2));
+        return new ButtonText(safeLabel,
+                x + Math.max(1, w / 2 - font.width(safeLabel) / 2),
+                y + Math.max(0, (h - 8) / 2),
+                enabled ? TEXT_TITLE : TEXT_DISABLED);
+    }
+
+    /**
+     * 分段按钮背景 + 命中检测；不绘制文字。
+     * 与 {@link #segmented} 的取色/描边逻辑一致，文字由 {@link #segmentedText} 另行排版。
+     */
+    public static boolean segmentedBg(
+            GuiGraphics g, int x, int y, int w, int h,
+            boolean selected, boolean hovered, int mx, int my) {
+        int fill = selected ? 0xFF8B8B8B : (hovered ? 0xFFD8D8D8 : 0xFFC6C6C6);
+        g.fill(x, y, x + w, y + h, fill);
+        if (selected) {
+            g.fill(x, y, x + w, y + h, MID);
+            g.fill(x, y, x + w, y + 1, OUTLINE);
+            g.fill(x, y, x + 1, y + h, OUTLINE);
+            g.fill(x, y + h - 1, x + w, y + h, OUTLINE);
+            g.fill(x + w - 1, y, x + w, y + h, OUTLINE);
+        } else {
+            g.fill(x, y, x + w, y + 1, HILIGHT);
+            g.fill(x, y, x + 1, y + h, HILIGHT);
+            g.fill(x, y + h - 1, x + w, y + h, SHADOW);
+            g.fill(x + w - 1, y, x + w, y + h, SHADOW);
+        }
+        return mx >= x && mx < x + w && my >= y && my < y + h;
+    }
+
+    /** 分段按钮文字排版（与 {@link #segmented} 内部公式一致）：selected 用白字。 */
+    public static SegmentedText segmentedText(Font font, String label, boolean selected,
+            int x, int y, int w, int h) {
+        String safeLabel = label == null ? "" : font.plainSubstrByWidth(label, Math.max(4, w - 2));
+        return new SegmentedText(safeLabel,
+                x + Math.max(1, w / 2 - font.width(safeLabel) / 2),
+                y + Math.max(0, (h - 8) / 2),
+                selected ? 0xFFFFFFFF : TEXT_TITLE);
+    }
 }
