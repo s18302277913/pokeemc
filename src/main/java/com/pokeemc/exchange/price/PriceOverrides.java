@@ -23,8 +23,13 @@ public final class PriceOverrides {
     /** 大师球固定购买价。 */
     public static final long MASTER_BALL_BUY_PRICE = 5_000_000L;
 
-    /** 大师球物品 id（覆盖价硬校验键）。 */
-    private static final TradeItemId MASTER_BALL = TradeItemId.parse("pixelmon:master_ball");
+    /**
+     * 大师球物品 id（覆盖价硬校验键）。
+     * [CHANGED] 会话 #14：Pixelmon 球类共用注册键 pixelmon:poke_ball，球种由
+     * PokeBall DataComponent 区分；覆盖价键改为球种感知编码 pixelmon:poke_ball#master_ball，
+     * 与仓储/目录 itemId 对齐（旧幽灵键 pixelmon:master_ball 注册表不存在，校验永不触发）。
+     */
+    private static final TradeItemId MASTER_BALL = TradeItemId.parse("pixelmon:poke_ball#master_ball");
 
     /** 当前覆盖价快照（数据包重载后由 ExchangePriceService 重建；模块初始化时读取内置默认）。 */
     private static volatile Map<TradeItemId, OverridePrice> loaded = Map.of();

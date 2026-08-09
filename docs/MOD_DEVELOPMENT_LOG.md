@@ -295,3 +295,27 @@ _（后续会话按时间倒序追加于此）_
 - [ ] **分类键本地化依赖语言文件**：`computeCategory` 返回 `itemGroup.*` 等键，客户端需持有对应语言文件才能本地化；若某模组 tab 名无语言条目，客户端回退显示原键（不崩溃）。Pixelmon 等模组的自定义 tab 分类显示效果需运行时确认。
 - [ ] **球类商品价格缺口**：`#` 编码后商品出售优雅降级「无价格不可出售」（价格表按 registry id 无法表达球种）。若需大师球可出售，需引入球种感知价格键（如 `pixelmon:poke_ball#master_ball`）——记录为 future TODO。
 - [ ] **构建提示**：`PokeballIdentity` 有 Pixelmon deprecated API 警告（`PokeBallItem.of` 或 `RegistryValue.get` 之一，编译通过不阻塞）；已验证 `PokeBallItem.of`/`RegistryValue.get` 签名存在于 pixelmon.jar。
+
+### [2026-08-09 15:55] 会话 #14 — 球类价格体系修复：球种感知价格键贯穿全链路（大师球 500万生效 + 交易列表补全）
+
+### 🎯 本次需求
+玩家反馈三个联动问题：
+1. **大师球有价（覆盖价 500万）却显示「暂无定价」**。
+2. **交易物品列表并不全**。
+3. **价格表前后端好像又不同步了**。
+
+经读码确认：三个 bug **同源**——价格表键是幽灵 id（`pixelmon:master_ball`/`pixelmon:great_ball` 等，Pixelmon 球类共用 `pixelmon:poke_ball` 注册键、球种在 DataComponent），而仓储/目录 itemId 已是球种感知键 `pixelmon:poke_ball#master_ball`（ADR-46 引入）。用户确认修复方向：**全部球类补全**（30+ 球种幽灵键全部迁到覆盖价，键改球种感知，buy=sell=现值），大师球 500万生效、全部可买可卖。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-51（根因 = 价格体系用幽灵 id，与球种感知 itemId 脱节）**：`ExchangePriceService.isObtainable`（`BuiltInRegistries.ITEM.get("pixelmon:master_ball")`）对幽灵键查注册表失败 → 覆盖价与 PKM 球类条目全部被剔除 → 目录里根本没有大师球/高级球等 → tooltip「暂无定价」、交易列表只有普通精灵球。这是数据键与运行时 itemId 两套命名体系的系统性失配。[CHANGED]（见 ADR-52~54）。
+- **ADR-52（`TradeItemId` PATH 正则加 `#` —— [BREAKING CHANGES] 语义扩展）**：`[a-z0-9/._-]+` → `[a-z0-9/._#-]+`，使球种感知键 `pixelmon:poke_ball#master_ball` 可 parse。向后兼容（旧 id 全部仍合法；`RegistryIdMigrationTest` malformed 列表不含 `#`），但「含 `#` 的 id 从非法变合法」是公共 API 语义扩展，故标注 [BREAKING CHANGES]。[CHANGED] `poketrade-api/TradeItemId.java`，新增 `#` roundTrip 断言。
+- **ADR-53（球类价格载体从 PKM 迁移到覆盖价）**：PKM 快照键是 `ResourceLocation`（path 非法 `#`），天然无法表达球种 → 球类兜底价必须走覆盖价 `prices.json`（buy=sell=现值，无套利）。迁移 30+ 球种：`pixelmon:poke_ball#great_ball`=512、`#ultra_ball`=1024、`#heal_ball`=384、`#quick_ball`/`#timer_ball`=384、`#premier_ball`=256、`#friend_ball`/`#love_ball`/`#lure_ball`/`#heavy_ball`/`#level_ball`/`#moon_ball`=768、`#dream_ball`=1536、`#beast_ball`/`#cherish_ball`/`#christmas_ball`=2048、`#dive_ball`/`#net_ball`/`#nest_ball`/`#repeat_ball`/`#fast_ball`/`#dusk_ball`=640、`#safari_ball`/`#park_ball`=512、`#sport_ball`/`#luxury_ball`=1024、`#ancient_poke_ball`=512、`#ancient_great_ball`=1024、`#ancient_ultra_ball`=2048、`#ancient_heavy_ball`=1536，`#master_ball`=500万（原幽灵键改球种感知）。`PriceOverrides.MASTER_BALL` 硬校验键同步改球种感知（否则幽灵键校验永不触发、默认注入落在错误键）。pixelmon.json 删除球类幽灵键，保留 `pixelmon:poke_ball`（普通精灵球仍走 PKM 兜底 256）与 `pixelmon:air_balloon`（真气球形道具）。[CHANGED] `prices.json`/`pixelmon.json`/`PriceOverrides.java`。
+- **ADR-54（全链路球种感知：所有 `ResourceLocation.parse/tryBuild` 调用点统一拆 `#`）**：统一经 `PokeballIdentity.baseItem`（base 注册表）/`decode`（带组件栈，未知球种 null）/`displayName`/`encode` 处理，不手写拆串：`ExchangePriceService.isObtainable`（幽灵键剔除根因）/`categoryOf`、`ExchangeCatalogPacket.isRealItem`（decode 校验球种，球类条目保留）/`itemDisplayName`（显示名搜索命中）、`TradeMarketService.itemOf`（baseItem）/`itemIdOf`（encode 编码球种，卖出匹配命中）/`buyBatch`（交付 decode 还原组件，买大师球不降级）、`StorageBrowserScreen.findInventoryTarget`（decode 样本，大师球可合并到背包）、`StorageWithdrawCarriedPacket`（取出还原组件）、`ExchangeScreen.stackOf`/购物车格/购物车 tooltip（`#` 键图标渲染，原 tryParse null → 空气）。`ExchangeService.sell` 无需改（正则放宽即 parse，`commitExtract` 只做槽位匹配不重建物品）。[CHANGED] 上述 8 文件。
+- **[DEPRECATED]** 幽灵键价格表（`pixelmon:master_ball` 等）不再生效；若旧数据包残留幽灵键，覆盖价仍会加载但 `isObtainable` 剔除、不显示（不崩溃）。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [x] 修复完成，验证链全绿：`compileJava` → `:test` 全量（**653 项**，含新增 `ballVariantOverrideAppearsInCatalogWithBalancedPrices`）→ `runGameTestServer`（**44/44**，含新增 `masterBallBallVariantKeyIsPricedInCatalog` + `buyMasterBallKeepsVariant`）→ `build --offline`。
+- [x] 会话 #13 TODO「球类商品价格缺口」已由本会话根治（球种感知价格键全链路生效）。
+- [ ] **运行时人工验证**：① 交易所目录显示全部球种（含大师球 500万、图标正确，非「暂无定价」）；② 仓储槽位 tooltip 显示大师球买/卖价（500万）；③ 买入大师球到手是大师球（组件保留）；④ 大师球可出售（背包/仓储两路）；⑤ 仓储取出大师球不降级、可合并到背包大师球；⑥ 购物车格/购物车 tooltip 显示球类图标。
+- [ ] **SellRules 语义边界**：黑/白名单是精确匹配 `TradeItemId`（本会话测试已改球种感知键）；黑名单 `pixelmon:poke_ball#master_ball` 只拦大师球、不拦其它球种——如需「拦全部球类」需按 `#` 前缀规则，记录为 future TODO。
+- [ ] **PKM 快照键上限**：`ResourceLocation` 无法表达 `#` 球种键，故球类价格永久由覆盖价承担（非 PKM）；未来若想经 EMC 合成树给球类补值，需扩展 `PKMManager` 支持 `#` 键——记录为 future TODO。

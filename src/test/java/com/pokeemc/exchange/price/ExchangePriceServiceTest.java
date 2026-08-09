@@ -35,24 +35,45 @@ class ExchangePriceServiceTest {
 
     @Test
     void overrideWinsAndNotMultiplied() {
+        // [CHANGED] 会话 #14：球类覆盖价键改为球种感知编码 pixelmon:poke_ball#master_ball
         ExchangePriceService svc = service(
-                Map.of(TradeItemId.parse("pixelmon:master_ball"),
+                Map.of(TradeItemId.parse("pixelmon:poke_ball#master_ball"),
                         new OfficialPriceParser.DoublePrice(500000.0, 0.0)),
-                Map.of(TradeItemId.parse("pixelmon:master_ball"),
+                Map.of(TradeItemId.parse("pixelmon:poke_ball#master_ball"),
                         new PriceOverrides.OverridePrice(5_000_000L, 0L)));
-        PriceQuote q = svc.quote(TradeItemId.parse("pixelmon:master_ball")).orElseThrow();
+        PriceQuote q = svc.quote(TradeItemId.parse("pixelmon:poke_ball#master_ball")).orElseThrow();
         assertEquals(5_000_000L, q.buyPrice());
     }
 
     @Test
     void doubleToLongRoundsExactly() {
+        // [CHANGED] 会话 #14：球类键改为球种感知编码 pixelmon:poke_ball#ultra_ball
         ExchangePriceService svc = service(
-                Map.of(TradeItemId.parse("pixelmon:ultra_ball"),
+                Map.of(TradeItemId.parse("pixelmon:poke_ball#ultra_ball"),
                         new OfficialPriceParser.DoublePrice(1200.0, 400.0)),
                 Map.of());
-        PriceQuote q = svc.quote(TradeItemId.parse("pixelmon:ultra_ball")).orElseThrow();
+        PriceQuote q = svc.quote(TradeItemId.parse("pixelmon:poke_ball#ultra_ball")).orElseThrow();
         assertEquals(12_000L, q.buyPrice());
         assertEquals(4_000L, q.sellPrice());
+    }
+
+    @Test
+    void ballVariantOverrideAppearsInCatalogWithBalancedPrices() {
+        // 会话 #14：球种感知键 pixelmon:poke_ball#master_ball 应可解析、可报价、
+        // 且 buy==sell 的覆盖价（无套利）条目出现在目录（此前幽灵键 pixelmon:master_ball
+        // 因注册表不存在被 isObtainable 剔除，目录里没有大师球 → 客户端显示「暂无定价」）。
+        TradeItemId masterBall = TradeItemId.parse("pixelmon:poke_ball#master_ball");
+        ExchangePriceService svc = service(
+                Map.of(),
+                Map.of(masterBall, new PriceOverrides.OverridePrice(5_000_000L, 5_000_000L)));
+        PriceQuote q = svc.quote(masterBall).orElse(null);
+        assertNotNull(q, "球种感知键覆盖价应有报价");
+        assertEquals(5_000_000L, q.buyPrice());
+        assertEquals(5_000_000L, q.sellPrice());
+        assertTrue(q.buyAvailable());
+        assertTrue(svc.catalog().entries().stream()
+                        .anyMatch(e -> e.quote().itemId().equals(masterBall)),
+                "球种感知键条目应出现在目录");
     }
 
     @Test
@@ -133,18 +154,19 @@ class ExchangePriceServiceTest {
 
     @Test
     void pkmFallbackDoesNotOverrideOfficialOrOverride() {
+        // [CHANGED] 会话 #14：master_ball 覆盖价键改为球种感知编码
         ExchangePriceService svc = service(
                 Map.of(TradeItemId.parse("pixelmon:poke_ball"),
                         new OfficialPriceParser.DoublePrice(200.0, 65.0)),
-                Map.of(TradeItemId.parse("pixelmon:master_ball"),
+                Map.of(TradeItemId.parse("pixelmon:poke_ball#master_ball"),
                         new PriceOverrides.OverridePrice(5_000_000L, 0L)),
                 Map.of(
                         TradeItemId.parse("pixelmon:poke_ball"), 256L,
-                        TradeItemId.parse("pixelmon:master_ball"), 65536L,
+                        TradeItemId.parse("pixelmon:poke_ball#master_ball"), 65536L,
                         TradeItemId.parse("minecraft:diamond"), 1024L));
         PriceQuote ball = svc.quote(TradeItemId.parse("pixelmon:poke_ball")).orElseThrow();
         assertEquals(2000L, ball.buyPrice()); // 官方价优先，非 PKM 256
-        PriceQuote master = svc.quote(TradeItemId.parse("pixelmon:master_ball")).orElseThrow();
+        PriceQuote master = svc.quote(TradeItemId.parse("pixelmon:poke_ball#master_ball")).orElseThrow();
         assertEquals(5_000_000L, master.buyPrice()); // 覆盖价优先，非 PKM 65536
         PriceQuote diamond = svc.quote(TradeItemId.parse("minecraft:diamond")).orElseThrow();
         assertEquals(1024L, diamond.sellPrice()); // 缺口由 PKM 兜底

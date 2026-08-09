@@ -14,12 +14,12 @@ class PriceOverridesTest {
     void parsesOverrides() {
         String json = """
                 { "items": {
-                    "pixelmon:master_ball": { "buyPrice": 5000000, "sellPrice": 0 }
+                    "pixelmon:poke_ball#master_ball": { "buyPrice": 5000000, "sellPrice": 0 }
                 } }
                 """;
         Map<TradeItemId, PriceOverrides.OverridePrice> out =
                 PriceOverrides.parse(JsonParser.parseString(json));
-        PriceOverrides.OverridePrice mb = out.get(TradeItemId.parse("pixelmon:master_ball"));
+        PriceOverrides.OverridePrice mb = out.get(TradeItemId.parse("pixelmon:poke_ball#master_ball"));
         assertNotNull(mb);
         assertEquals(5_000_000L, mb.buy());
         // [CHANGED] Bug #3：卖出价尊重数据包定义（此处 sell=0 表示显式关闭回收）
@@ -32,12 +32,12 @@ class PriceOverridesTest {
         // 不再被强制归零，数据包给出的卖出价（500 万）原样生效。
         String json = """
                 { "items": {
-                    "pixelmon:master_ball": { "buyPrice": 5000000, "sellPrice": 5000000 }
+                    "pixelmon:poke_ball#master_ball": { "buyPrice": 5000000, "sellPrice": 5000000 }
                 } }
                 """;
         Map<TradeItemId, PriceOverrides.OverridePrice> out =
                 PriceOverrides.parse(JsonParser.parseString(json));
-        PriceOverrides.OverridePrice mb = out.get(TradeItemId.parse("pixelmon:master_ball"));
+        PriceOverrides.OverridePrice mb = out.get(TradeItemId.parse("pixelmon:poke_ball#master_ball"));
         assertNotNull(mb);
         assertEquals(5_000_000L, mb.buy());
         assertEquals(5_000_000L, mb.sell());
@@ -47,7 +47,7 @@ class PriceOverridesTest {
     void validatesMasterBallFixedPrice() {
         // 大师球覆盖价不等于 500 万 -> 视为配置错误，不静默纠正
         String json = """
-                { "items": { "pixelmon:master_ball": { "buyPrice": 123456, "sellPrice": 0 } } }
+                { "items": { "pixelmon:poke_ball#master_ball": { "buyPrice": 123456, "sellPrice": 0 } } }
                 """;
         assertThrows(IllegalStateException.class,
                 () -> PriceOverrides.parse(JsonParser.parseString(json)));
@@ -58,7 +58,7 @@ class PriceOverridesTest {
         String json = "{ \"items\": {} }";
         Map<TradeItemId, PriceOverrides.OverridePrice> out =
                 PriceOverrides.parse(JsonParser.parseString(json));
-        PriceOverrides.OverridePrice mb = out.get(TradeItemId.parse("pixelmon:master_ball"));
+        PriceOverrides.OverridePrice mb = out.get(TradeItemId.parse("pixelmon:poke_ball#master_ball"));
         assertNotNull(mb);
         assertEquals(PriceOverrides.MASTER_BALL_BUY_PRICE, mb.buy());
     }
@@ -97,7 +97,7 @@ class PriceOverridesTest {
                 PriceOverrides.parse(JsonParser.parseString(json));
         // 非法 id 被跳过，仅剩大师球默认注入
         assertEquals(1, out.size());
-        assertTrue(out.containsKey(TradeItemId.parse("pixelmon:master_ball")));
+        assertTrue(out.containsKey(TradeItemId.parse("pixelmon:poke_ball#master_ball")));
     }
 
     @Test

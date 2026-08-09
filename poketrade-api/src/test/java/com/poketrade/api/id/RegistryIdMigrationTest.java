@@ -105,6 +105,9 @@ class RegistryIdMigrationTest {
         assertRoundTrip(new TradeItemId("a", "b"));
         assertRoundTrip(new TradeItemId("a", "b.c-d_e/f"));
         assertRoundTrip(new TradeItemId("namespace.with-dash_1", "path/with.dot-dash_1"));
+        // [CHANGED] 会话 #14：'#' 加入 PATH 正则后，球种感知键（Pixelmon 球类 itemId
+        // pixelmon:poke_ball#master_ball）必须可 parse → toString 往返一致。
+        assertRoundTrip(TradeItemId.parse("pixelmon:poke_ball#master_ball"));
     }
 
     private static void assertRoundTrip(TradeItemId id) {

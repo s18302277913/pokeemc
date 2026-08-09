@@ -9,6 +9,7 @@ import com.pokeemc.storage.StorageRecord;
 import com.pokeemc.storage.StorageSavedData;
 import com.pokeemc.storage.StorageServices;
 import com.pokeemc.storage.adapter.AbstractContainerAdapter;
+import com.pokeemc.storage.adapter.PokeballIdentity;
 import com.pokeemc.storage.adapter.VanillaEnderChestAdapter;
 import com.pokeemc.storage.adapter.StorageHandleExt;
 import com.poketrade.api.storage.StorageAdapter;
@@ -17,7 +18,6 @@ import com.poketrade.api.storage.StorageHandle;
 import com.poketrade.api.storage.StorageId;
 import io.netty.buffer.ByteBuf;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
@@ -185,8 +185,14 @@ public record StorageWithdrawCarriedPacket(
                         "slot content changed");
             }
             ext.commitExtract(packet.slotIndex(), itemId, count);
-            ResourceLocation rl = ResourceLocation.parse(itemId);
-            ItemStack stack = new ItemStack(BuiltInRegistries.ITEM.get(rl), count);
+            // [CHANGED] 会话 #14：球类 itemId 含 '#'（pixelmon:poke_ball#master_ball），
+            // ResourceLocation.parse 抛异常 → 球类取出崩/降级；改经 PokeballIdentity.decode
+            // 还原带 POKE_BALL 组件的 ItemStack（未知球种返回 null → 抛异常回滚为 internal_error，
+            // 客户端刷新恢复，不静默降级成精灵球）。
+            ItemStack stack = PokeballIdentity.decode(itemId, count);
+            if (stack == null || stack.isEmpty()) {
+                throw new IllegalStateException("withdraw item id cannot be decoded: " + itemId);
+            }
             player.containerMenu.setCarried(stack);
             player.containerMenu.broadcastChanges();
             long newRev = data.updateRecord(key, record.revision(), r -> r)

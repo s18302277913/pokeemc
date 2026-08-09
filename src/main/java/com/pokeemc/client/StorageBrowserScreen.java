@@ -705,19 +705,24 @@ public class StorageBrowserScreen
         return -1;
     }
 
-    /** 自动寻找背包目标槽位：优先同物品合并，再找空位；无合适槽位返回 -1。 */
+    /**
+     * 自动寻找背包目标槽位：优先同物品合并，再找空位；无合适槽位返回 -1。
+     * [CHANGED] 会话 #14：球类 itemId 含 '#'（pixelmon:poke_ball#master_ball），
+     * ResourceLocation.parse 抛异常 → 球类无法取出；且 new ItemStack(item) 丢
+     * POKE_BALL 组件，大师球永不与背包大师球合并。改经 PokeballIdentity.decode
+     * 还原带组件的样本栈做 isSameItemSameComponents 匹配。
+     */
     private int findInventoryTarget(StorageItemSlot source) {
-        Item item = null;
+        ItemStack sample = null;
         try {
-            item = BuiltInRegistries.ITEM.get(ResourceLocation.parse(source.itemId()));
+            sample = PokeballIdentity.decode(source.itemId(), 1);
         } catch (RuntimeException ignored) {
             // 物品 id 无法解析时按不可取出处理
         }
-        if (item == null || item == net.minecraft.world.item.Items.AIR) {
+        if (sample == null || sample.isEmpty()) {
             return -1;
         }
-        int maxStack = Math.max(1, item.getDefaultMaxStackSize());
-        ItemStack sample = new ItemStack(item);
+        int maxStack = Math.max(1, sample.getMaxStackSize());
         Inventory inv = this.minecraft.player.getInventory();
         for (int i = 0; i < inv.items.size(); i++) {
             ItemStack s = inv.getItem(i);

@@ -4,19 +4,18 @@ import com.pokeemc.PokeEMC;
 import com.pokeemc.config.PokeTradeConfig;
 import com.pokeemc.exchange.market.SellRules;
 import com.pokeemc.exchange.price.ExchangePriceService;
+import com.pokeemc.storage.adapter.PokeballIdentity;
 import com.poketrade.api.TradeItemId;
 import com.poketrade.api.price.PriceCatalog;
 import com.poketrade.api.price.PriceCatalogEntry;
 import com.poketrade.api.price.PriceSort;
 import io.netty.buffer.ByteBuf;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.item.Item;
-import net.minecraft.world.item.Items;
+import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 import java.util.List;
@@ -156,14 +155,14 @@ public final class ExchangeCatalogPacket {
     /**
      * 物品的服务端默认显示名（小写，用于搜索匹配）。解析失败或注册表查不到时返回空串，
      * 使该条目不因显示名命中而入选，但不影响 itemId/category 的既有匹配。
+     * [CHANGED] 会话 #14：球类 itemId 含 '#'（pixelmon:poke_ball#master_ball），
+     * ResourceLocation.parse 会抛异常 → 球类显示名搜索失配。改经
+     * {@link PokeballIdentity#displayName} 还原球种名（大师球），中文名/球种名搜索可命中。
      */
     private static String itemDisplayName(TradeItemId id) {
         try {
-            Item item = BuiltInRegistries.ITEM.get(ResourceLocation.parse(id.toString()));
-            if (item == null || item == Items.AIR) {
-                return "";
-            }
-            return item.getDefaultInstance().getHoverName().getString().toLowerCase();
+            String name = PokeballIdentity.displayName(id.toString());
+            return name == null ? "" : name.toLowerCase();
         } catch (RuntimeException ignored) {
             return "";
         }
@@ -172,16 +171,15 @@ public final class ExchangeCatalogPacket {
     /**
      * 服务端二次门：真实可渲染物品（非 AIR 且注册表能解析到具体 Item 实例）。
      * 用于在发送前剔除 any 的残差，防止客户端出现空气槽位。
+     * [CHANGED] 会话 #14：球类 itemId 含 '#'，ResourceLocation.parse 抛异常 → 球类条目
+     * 被二次过滤剔除（大师球目录消失）。改经 {@link PokeballIdentity#decode} 校验：
+     * 球类同时校验 base 注册表与具体球种（未知球种返回 null → 剔除），普通物品校验
+     * 注册表；AIR/cave_air/void_air 的 Item 即为 AIR，decode 天然返回 null → 剔除。
      */
     private static boolean isRealItem(TradeItemId id) {
         try {
-            ResourceLocation rl = ResourceLocation.parse(id.toString());
-            String path = rl.getPath();
-            if ("air".equals(path) || "cave_air".equals(path) || "void_air".equals(path)) {
-                return false;
-            }
-            Item item = BuiltInRegistries.ITEM.get(rl);
-            return item != null && item != Items.AIR;
+            ItemStack s = PokeballIdentity.decode(id.toString(), 1);
+            return s != null && !s.isEmpty();
         } catch (RuntimeException ignored) {
             return false;
         }

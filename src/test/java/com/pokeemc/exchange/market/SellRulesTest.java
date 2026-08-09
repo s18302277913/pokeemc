@@ -13,9 +13,9 @@ class SellRulesTest {
     @Test
     void blacklistBlocksSell() {
         SellRules rules = SellRules.parse(JsonParser.parseString("""
-                { "sellBlacklist": ["pixelmon:master_ball"], "requireConfirmValue": 100000 }
+                { "sellBlacklist": ["pixelmon:poke_ball#master_ball"], "requireConfirmValue": 100000 }
                 """));
-        assertFalse(rules.canSell(TradeItemId.parse("pixelmon:master_ball")));
+        assertFalse(rules.canSell(TradeItemId.parse("pixelmon:poke_ball#master_ball")));
         assertTrue(rules.canSell(TradeItemId.parse("pixelmon:poke_ball")));
     }
 
@@ -48,10 +48,10 @@ class SellRulesTest {
     void blacklistOverridesWhitelist() {
         // 同物品同时出现在黑白名单时，黑名单优先拦截（canSell 先查黑名单）。
         SellRules rules = SellRules.parse(JsonParser.parseString("""
-                { "sellBlacklist": ["pixelmon:master_ball"],
-                  "sellWhitelist": ["pixelmon:poke_ball", "pixelmon:master_ball"] }
+                { "sellBlacklist": ["pixelmon:poke_ball#master_ball"],
+                  "sellWhitelist": ["pixelmon:poke_ball", "pixelmon:poke_ball#master_ball"] }
                 """));
-        assertFalse(rules.canSell(TradeItemId.parse("pixelmon:master_ball")));
+        assertFalse(rules.canSell(TradeItemId.parse("pixelmon:poke_ball#master_ball")));
         assertTrue(rules.canSell(TradeItemId.parse("pixelmon:poke_ball")));
     }
 
@@ -62,7 +62,7 @@ class SellRulesTest {
                 { "sellBlacklist": ["not a valid id", "pixelmon:"] }
                 """));
         assertTrue(rules.canSell(TradeItemId.parse("pixelmon:poke_ball")));
-        assertTrue(rules.canSell(TradeItemId.parse("pixelmon:master_ball")));
+        assertTrue(rules.canSell(TradeItemId.parse("pixelmon:poke_ball#master_ball")));
     }
 
     @Test
@@ -75,10 +75,10 @@ class SellRulesTest {
     @Test
     void exposesBlacklistWhitelistAndAllowlistEnabled() {
         SellRules rules = SellRules.parse(JsonParser.parseString("""
-                { "sellBlacklist": ["pixelmon:master_ball"],
+                { "sellBlacklist": ["pixelmon:poke_ball#master_ball"],
                   "sellWhitelist": ["pixelmon:poke_ball"] }
                 """));
-        assertEquals(Set.of(TradeItemId.parse("pixelmon:master_ball")), rules.blacklist());
+        assertEquals(Set.of(TradeItemId.parse("pixelmon:poke_ball#master_ball")), rules.blacklist());
         assertEquals(Set.of(TradeItemId.parse("pixelmon:poke_ball")), rules.whitelist());
         assertTrue(rules.allowlistEnabled());
 

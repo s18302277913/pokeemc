@@ -1,5 +1,9 @@
 package com.pokeemc.exchange;
 
+import com.pixelmonmod.api.registry.RegistryValue;
+import com.pixelmonmod.pixelmon.api.pokemon.item.pokeball.PokeBall;
+import com.pixelmonmod.pixelmon.init.registry.PixelmonDataComponents;
+import com.pixelmonmod.pixelmon.items.PokeBallItem;
 import com.pokeemc.exchange.market.ExchangeWallet;
 import com.pokeemc.exchange.market.TradeMarketService;
 import com.pokeemc.exchange.price.ExchangePriceService;
@@ -214,6 +218,64 @@ public class ExchangeGameTests {
         check(helper, r == TradeResult.SUCCESS, "覆盖价买入应成功，实际 " + r);
         check(helper, wallet.getBalance(p) == 0L, "买入后钱包应扣 5,000,000");
         check(helper, hasInInventory(p, "minecraft:diamond"), "背包应获得 diamond");
+        helper.succeed();
+    }
+
+    /**
+     * 会话 #14 回归：球种感知键 pixelmon:poke_ball#master_ball 覆盖价 500 万
+     * （买=卖）必须可报价且条目出现在目录——此前幽灵键 pixelmon:master_ball 因
+     * 注册表不存在被 isObtainable 剔除，大师球「暂无定价」、交易列表不全。
+     */
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void masterBallBallVariantKeyIsPricedInCatalog(GameTestHelper helper) {
+        TradeItemId masterBall = TradeItemId.parse("pixelmon:poke_ball#master_ball");
+        Map<TradeItemId, OfficialPriceParser.DoublePrice> official = new HashMap<>();
+        Map<TradeItemId, PriceOverrides.OverridePrice> overrides = new HashMap<>();
+        overrides.put(masterBall, new PriceOverrides.OverridePrice(5_000_000L, 5_000_000L));
+        ExchangePriceService svc = new ExchangePriceService(official, overrides);
+
+        PriceQuote q = svc.quote(masterBall).orElse(null);
+        check(helper, q != null, "球种感知键覆盖价应有报价，实际 null");
+        if (q != null) {
+            check(helper, q.buyPrice() == 5_000_000L && q.sellPrice() == 5_000_000L,
+                    "大师球覆盖价应为买=卖=5,000,000，实际 buy=" + q.buyPrice() + " sell=" + q.sellPrice());
+            check(helper, q.buyAvailable(), "大师球应可买入");
+        }
+        boolean inCatalog = svc.catalog().entries().stream()
+                .anyMatch(e -> e.quote().itemId().equals(masterBall));
+        check(helper, inCatalog, "球种感知键条目应出现在目录");
+        helper.succeed();
+    }
+
+    /**
+     * 会话 #14 回归：买入球种感知键必须还原 POKE_BALL 组件（BuyMarketService.buyBatch
+     * 交付改经 PokeballIdentity.decode）——买入大师球到手是大师球，不降级成精灵球。
+     */
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void buyMasterBallKeepsVariant(GameTestHelper helper) {
+        ServerPlayer p = player(helper);
+        MemoryWallet wallet = new MemoryWallet();
+        wallet.add(p, 5_000_000L);
+        TradeItemId masterBall = TradeItemId.parse("pixelmon:poke_ball#master_ball");
+        Map<TradeItemId, OfficialPriceParser.DoublePrice> official = new HashMap<>();
+        Map<TradeItemId, PriceOverrides.OverridePrice> overrides = new HashMap<>();
+        overrides.put(masterBall, new PriceOverrides.OverridePrice(5_000_000L, 5_000_000L));
+        TradeResult r = new TradeMarketService(new ExchangePriceService(official, overrides), wallet)
+                .buyBatch(p, List.of(new CartLine(masterBall, 1)), "mb-var-buy-" + System.nanoTime());
+        check(helper, r == TradeResult.SUCCESS, "球种感知键买入应成功，实际 " + r);
+        check(helper, wallet.getBalance(p) == 0L, "买入后钱包应扣 5,000,000，实际 " + wallet.getBalance(p));
+        boolean found = false;
+        for (ItemStack s : p.getInventory().items) {
+            if (s.isEmpty() || !(s.getItem() instanceof PokeBallItem)) {
+                continue;
+            }
+            RegistryValue<PokeBall> ball = s.get(PixelmonDataComponents.POKE_BALL.get());
+            if (ball != null && "master_ball".equals(ball.get().getName())) {
+                found = true;
+                break;
+            }
+        }
+        check(helper, found, "买入到手应是带 master_ball 组件的球，而非普通精灵球");
         helper.succeed();
     }
 }

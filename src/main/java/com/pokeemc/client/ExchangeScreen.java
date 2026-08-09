@@ -405,9 +405,15 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         this.lastSearchText = this.searchBox == null ? "" : this.searchBox.getValue();
     }
 
+    /**
+     * 目录条目 → 渲染用 ItemStack（含组件）。
+     * [CHANGED] 会话 #14：球类 itemId 含 '#'（pixelmon:poke_ball#master_ball），
+     * ResourceLocation.tryParse 返回 null → 球类图标渲染为空气。改经
+     * PokeballIdentity.decode 还原带 POKE_BALL 组件的栈（大师球图标/颜色正确）。
+     */
     private ItemStack stackOf(ExchangeCatalogPacket.EntryWire e) {
-        ResourceLocation rl = ResourceLocation.tryParse(e.itemId());
-        return rl == null ? ItemStack.EMPTY : new ItemStack(BuiltInRegistries.ITEM.get(rl));
+        ItemStack s = PokeballIdentity.decode(e.itemId(), 1);
+        return (s == null || s.isEmpty()) ? ItemStack.EMPTY : s;
     }
 
     /** 本地化显示名解析器（C2/C6：目录与出售预览共用；解析失败返回空串）。 */
@@ -2120,9 +2126,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     if (idx == selectedCart) {
                         g.fill(gx - 1, gy - 1, gx + 17, gy + 17, 0x338B6B1B);
                     }
-                    ResourceLocation rl = ResourceLocation.tryParse(cart.get(idx).itemId());
-                    if (rl != null) {
-                        ItemStack s = new ItemStack(BuiltInRegistries.ITEM.get(rl));
+                    // [CHANGED] 会话 #14：球类 itemId 含 '#'，tryParse 返回 null →
+                    // 球类购物车格无图标。改 decode 还原带组件栈。
+                    ItemStack s = PokeballIdentity.decode(cart.get(idx).itemId(), 1);
+                    if (s != null && !s.isEmpty()) {
                         g.renderItem(s, gx + 1, gy + 1);
                         g.renderItemDecorations(this.font, s, gx + 1, gy + 1);
                     }
@@ -2642,9 +2649,12 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     + cartScroll * cartCols;
             if (idx >= 0 && idx < cart.size()) {
                 ExchangeUiModel.CartLine line = cart.get(idx);
-                ResourceLocation rl = ResourceLocation.tryParse(line.itemId());
-                ItemStack s = rl == null ? ItemStack.EMPTY
-                        : new ItemStack(BuiltInRegistries.ITEM.get(rl));
+                // [CHANGED] 会话 #14：球类 itemId 含 '#'，tryParse 返回 null → 球类购物车
+                // tooltip 无图标/名称。改 decode 还原带组件栈。
+                ItemStack s = PokeballIdentity.decode(line.itemId(), 1);
+                if (s == null) {
+                    s = ItemStack.EMPTY;
+                }
                 long unit = 0;
                 for (ExchangeCatalogPacket.EntryWire entry : catalog) {
                     if (entry.itemId().equals(line.itemId())) {

@@ -3,6 +3,7 @@ package com.pokeemc.exchange.price;
 import com.pokeemc.PokeEMC;
 import com.pokeemc.config.PokeTradeConfig;
 import com.pokeemc.emc.PKMManager;
+import com.pokeemc.storage.adapter.PokeballIdentity;
 import com.poketrade.api.TradeItemId;
 import com.poketrade.api.price.PriceCatalog;
 import com.poketrade.api.price.PriceCatalogEntry;
@@ -201,21 +202,27 @@ public final class ExchangePriceService {
      * 以上所有判定仅基于静态注册表/物品属性，不依赖世界状态。
      */
     private static boolean isObtainable(TradeItemId id) {
-        ResourceLocation rl = ResourceLocation.tryBuild(id.namespace(), id.path());
-        if (rl == null) {
-            return false;
-        }
+        // [CHANGED] 会话 #14：球类 itemId 含 '#'（pixelmon:poke_ball#master_ball），
+        // ResourceLocation.tryBuild 对 '#' 返回 null 导致全部球类被剔除（大师球「暂无定价」、
+        // 交易列表不全）。改为经 PokeballIdentity.baseItem 拆分 base 部分取基础 Item
+        // （球类 → pixelmon:poke_ball）；具体球种的有效性由目录 ExchangeCatalogPacket.isRealItem
+        // 的 decode 二次校验（未知球种剔除）。
         Item item;
         try {
-            item = BuiltInRegistries.ITEM.get(rl);
+            item = PokeballIdentity.baseItem(id.toString());
         } catch (LinkageError | RuntimeException e) {
             // 未就绪（测试环境 Bootstrap 未启动）时保守地保留该条目，由后续渲染再兜底
             return true;
         }
-        if (item == null || item == net.minecraft.world.item.Items.AIR) {
+        if (item == null) {
             return false;
         }
-        String path = rl.getPath();
+        // 路径判定基于 base 部分（'#' 前）；普通物品无 '#'，path 原样
+        String path = id.path();
+        int sep = path.indexOf(PokeballIdentity.SEP);
+        if (sep >= 0) {
+            path = path.substring(0, sep);
+        }
         // 空气类方块（洞穴/虚空空气只有 Block 存在，对应 Item 就是 AIR；这里按 path 兜底防止有别名直接进入）
         if ("air".equals(path) || "cave_air".equals(path) || "void_air".equals(path)) {
             return false;
@@ -290,28 +297,27 @@ public final class ExchangePriceService {
     }
 
     private static String categoryOf(TradeItemId id) {
-        ResourceLocation rl = ResourceLocation.tryBuild(id.namespace(), id.path());
-        if (rl == null) {
-            return "unknown";
-        }
+        // [CHANGED] 会话 #14：球类 itemId 含 '#'，ResourceLocation.tryBuild 返回 null
+        // 恒回退 unknown → 目录球类条目分类丢失。改为 baseItem 取基础 Item 再查缓存。
+        Item item;
         try {
-            Item item = BuiltInRegistries.ITEM.get(rl);
-            if (item == null || item == net.minecraft.world.item.Items.AIR) {
-                return "unknown";
-            }
-            String cached = CATEGORY_CACHE.get(item);
-            if (cached != null) {
-                return cached;
-            }
-            String key = computeCategory(item);
-            CATEGORY_CACHE.putIfAbsent(item, key);
-            return key;
+            item = PokeballIdentity.baseItem(id.toString());
         } catch (LinkageError | RuntimeException e) {
             // 注册表未就绪（如纯 JVM 单测环境未执行 Bootstrap.bootStrap）时回退 unknown；
             // 服务端数据包重载路径注册表已就绪，不受影响。
             PokeEMC.LOGGER.debug("PokeEMC: category lookup failed for {}", id, e);
+            return "unknown";
         }
-        return "unknown";
+        if (item == null) {
+            return "unknown";
+        }
+        String cached = CATEGORY_CACHE.get(item);
+        if (cached != null) {
+            return cached;
+        }
+        String key = computeCategory(item);
+        CATEGORY_CACHE.putIfAbsent(item, key);
+        return key;
     }
 
     /**

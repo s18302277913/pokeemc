@@ -4,13 +4,12 @@ import com.pokeemc.PokeEMC;
 import com.pokeemc.config.PokeTradeConfig;
 import com.pokeemc.economy.PixelmonWallet;
 import com.pokeemc.exchange.price.ExchangePriceService;
+import com.pokeemc.storage.adapter.PokeballIdentity;
 import com.poketrade.api.TradeItemId;
 import com.poketrade.api.TradeResult;
 import com.poketrade.api.market.MarketTradeService;
 import com.poketrade.api.price.PriceCatalog;
 import com.poketrade.api.price.PriceQuote;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Inventory;
@@ -175,11 +174,17 @@ public final class TradeMarketService implements MarketTradeService {
             }
             // 购物车单行上限 64 与客户端一致；物品堆叠上限可能小于 64
             // （如末影珍珠 16、非堆叠 1），按物品最大堆叠拆成多个栈交付。
+            // [CHANGED] 会话 #14：买入重建必须经 PokeballIdentity.decode 还原球种组件——
+            // 原 new ItemStack(item) 对球类丢失 POKE_BALL 组件，买入大师球会降级成精灵球。
             int remaining = line.count();
             int maxStack = Math.max(1, item.getDefaultMaxStackSize());
             while (remaining > 0) {
                 int part = Math.min(remaining, maxStack);
-                out.add(new ItemStack(item, part));
+                ItemStack produced = PokeballIdentity.decode(line.itemId().toString(), part);
+                if (produced == null || produced.isEmpty()) {
+                    return TradeResult.UNKNOWN_ITEM;
+                }
+                out.add(produced);
                 remaining -= part;
             }
         }
@@ -339,13 +344,14 @@ public final class TradeMarketService implements MarketTradeService {
         return server.getPlayerList().getPlayer(playerId);
     }
 
+    /**
+     * id → 基础 Item（用于 maxStack 判断与买入物品重建）。
+     * [CHANGED] 会话 #14：球类 itemId 含 '#'（pixelmon:poke_ball#master_ball），
+     * ResourceLocation.tryBuild 对 '#' 抛异常/返回 null → 大师球买入报 UNKNOWN_ITEM。
+     * 改经 {@link PokeballIdentity#baseItem} 拆分 base 部分取基础 Item；未知/非法返回 null。
+     */
     private static Item itemOf(TradeItemId id) {
-        ResourceLocation rl = ResourceLocation.tryBuild(id.namespace(), id.path());
-        if (rl == null) {
-            return null;
-        }
-        Item item = BuiltInRegistries.ITEM.get(rl);
-        return (item == null || item == net.minecraft.world.item.Items.AIR) ? null : item;
+        return PokeballIdentity.baseItem(id.toString());
     }
 
     /**
@@ -449,9 +455,15 @@ public final class TradeMarketService implements MarketTradeService {
         return removed;
     }
 
+    /**
+     * ItemStack → TradeItemId（球类含球种后缀）。
+     * [CHANGED] 会话 #14：球类 itemId 必须经 {@link PokeballIdentity#encode} 编码球种——
+     * 原 BuiltInRegistries.ITEM.getKey 只给注册键 pixelmon:poke_ball，与出售请求的
+     * 球种键 pixelmon:poke_ball#master_ball 永不相等 → 卖出大师球报「数量无效」。
+     */
     private static TradeItemId itemIdOf(ItemStack stack) {
-        ResourceLocation rl = BuiltInRegistries.ITEM.getKey(stack.getItem());
-        return rl == null ? TradeItemId.parse("minecraft:air")
-                : new TradeItemId(rl.getNamespace(), rl.getPath());
+        String encoded = PokeballIdentity.encode(stack);
+        return encoded == null ? TradeItemId.parse("minecraft:air")
+                : TradeItemId.parse(encoded);
     }
 }

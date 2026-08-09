@@ -1,5 +1,35 @@
 {
   "items": {
-    "pixelmon:master_ball": { "buyPrice": 5000000, "sellPrice": 5000000 }
+    "pixelmon:poke_ball#premier_ball": { "buyPrice": 256, "sellPrice": 256 },
+    "pixelmon:poke_ball#heal_ball": { "buyPrice": 384, "sellPrice": 384 },
+    "pixelmon:poke_ball#quick_ball": { "buyPrice": 384, "sellPrice": 384 },
+    "pixelmon:poke_ball#timer_ball": { "buyPrice": 384, "sellPrice": 384 },
+    "pixelmon:poke_ball#great_ball": { "buyPrice": 512, "sellPrice": 512 },
+    "pixelmon:poke_ball#safari_ball": { "buyPrice": 512, "sellPrice": 512 },
+    "pixelmon:poke_ball#park_ball": { "buyPrice": 512, "sellPrice": 512 },
+    "pixelmon:poke_ball#ancient_poke_ball": { "buyPrice": 512, "sellPrice": 512 },
+    "pixelmon:poke_ball#dive_ball": { "buyPrice": 640, "sellPrice": 640 },
+    "pixelmon:poke_ball#net_ball": { "buyPrice": 640, "sellPrice": 640 },
+    "pixelmon:poke_ball#nest_ball": { "buyPrice": 640, "sellPrice": 640 },
+    "pixelmon:poke_ball#repeat_ball": { "buyPrice": 640, "sellPrice": 640 },
+    "pixelmon:poke_ball#fast_ball": { "buyPrice": 640, "sellPrice": 640 },
+    "pixelmon:poke_ball#dusk_ball": { "buyPrice": 640, "sellPrice": 640 },
+    "pixelmon:poke_ball#friend_ball": { "buyPrice": 768, "sellPrice": 768 },
+    "pixelmon:poke_ball#love_ball": { "buyPrice": 768, "sellPrice": 768 },
+    "pixelmon:poke_ball#lure_ball": { "buyPrice": 768, "sellPrice": 768 },
+    "pixelmon:poke_ball#heavy_ball": { "buyPrice": 768, "sellPrice": 768 },
+    "pixelmon:poke_ball#level_ball": { "buyPrice": 768, "sellPrice": 768 },
+    "pixelmon:poke_ball#moon_ball": { "buyPrice": 768, "sellPrice": 768 },
+    "pixelmon:poke_ball#ultra_ball": { "buyPrice": 1024, "sellPrice": 1024 },
+    "pixelmon:poke_ball#sport_ball": { "buyPrice": 1024, "sellPrice": 1024 },
+    "pixelmon:poke_ball#luxury_ball": { "buyPrice": 1024, "sellPrice": 1024 },
+    "pixelmon:poke_ball#ancient_great_ball": { "buyPrice": 1024, "sellPrice": 1024 },
+    "pixelmon:poke_ball#dream_ball": { "buyPrice": 1536, "sellPrice": 1536 },
+    "pixelmon:poke_ball#ancient_heavy_ball": { "buyPrice": 1536, "sellPrice": 1536 },
+    "pixelmon:poke_ball#beast_ball": { "buyPrice": 2048, "sellPrice": 2048 },
+    "pixelmon:poke_ball#cherish_ball": { "buyPrice": 2048, "sellPrice": 2048 },
+    "pixelmon:poke_ball#christmas_ball": { "buyPrice": 2048, "sellPrice": 2048 },
+    "pixelmon:poke_ball#ancient_ultra_ball": { "buyPrice": 2048, "sellPrice": 2048 },
+    "pixelmon:poke_ball#master_ball": { "buyPrice": 5000000, "sellPrice": 5000000 }
   }
 }
