@@ -28,9 +28,9 @@ class StorageConfigTest {
     void clampRadiusCapsAtPlayerAdminTiers() {
         assertEquals(StorageConfig.MAX_PLAYER_RADIUS, config.clampRadius(10_000, false));
         assertEquals(StorageConfig.MAX_ADMIN_RADIUS, config.clampRadius(10_000, true));
-        // 管理员请求超出普通玩家上限时按管理员上限放行，普通玩家被截断到玩家上限
+        // 上限以内放行（会话 #9 起玩家/管理员上限均为 648，200 不再被截断）
         assertEquals(200, config.clampRadius(200, true));
-        assertEquals(128, config.clampRadius(200, false));
+        assertEquals(200, config.clampRadius(200, false));
     }
 
     @Test

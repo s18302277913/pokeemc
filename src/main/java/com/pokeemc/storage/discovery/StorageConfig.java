@@ -11,10 +11,10 @@ public final class StorageConfig {
 
     /** 玩家查询的默认半径（方块）。 */
     public static final int DEFAULT_RADIUS = 32;
-    /** 普通玩家可查询的最大半径。 */
-    public static final int MAX_PLAYER_RADIUS = 128;
-    /** 管理员（有 manage 权限的 actor）可查询的最大半径。 */
-    public static final int MAX_ADMIN_RADIUS = 256;
+    /** 普通玩家可查询的最大半径（会话 #9 起提升到 648，配合交易所范围按钮档位上限）。 */
+    public static final int MAX_PLAYER_RADIUS = 648;
+    /** 管理员（有 manage 权限的 actor）可查询的最大半径（同玩家上限；大范围扫描受 MAX_SCANNED_PER_QUERY 硬上限保护）。 */
+    public static final int MAX_ADMIN_RADIUS = 648;
     /** 单次查询返回结果的硬上限。 */
     public static final int DEFAULT_MAX_RESULTS = 200;
     /** 后台增量刷新时每个 tick 最多扫描的区块数。 */

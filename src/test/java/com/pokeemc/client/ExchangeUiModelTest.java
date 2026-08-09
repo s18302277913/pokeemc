@@ -157,10 +157,26 @@ class ExchangeUiModelTest {
 
     @Test
     void storageScopeCyclesSupportedRadiusPresets() {
+        // 点击切换：每击翻倍，16 → 32 → 64 → 128 → 256 → 512 → 648 → 重置 16
         assertEquals(32, ExchangeUiModel.nextStorageRadius(16));
         assertEquals(64, ExchangeUiModel.nextStorageRadius(32));
-        assertEquals(16, ExchangeUiModel.nextStorageRadius(64));
-        assertEquals(16, ExchangeUiModel.nextStorageRadius(512));
+        assertEquals(128, ExchangeUiModel.nextStorageRadius(64));
+        assertEquals(256, ExchangeUiModel.nextStorageRadius(128));
+        assertEquals(512, ExchangeUiModel.nextStorageRadius(256));
+        assertEquals(648, ExchangeUiModel.nextStorageRadius(512));
+        assertEquals(16, ExchangeUiModel.nextStorageRadius(648));
+    }
+
+    @Test
+    void storageScopeSnapsNonStepValuesToNextLargerStepOrDefault() {
+        // 非档位残留值跳到下一个更大档位（防历史输入破坏循环）
+        assertEquals(16, ExchangeUiModel.nextStorageRadius(0));
+        assertEquals(16, ExchangeUiModel.nextStorageRadius(10));
+        assertEquals(32, ExchangeUiModel.nextStorageRadius(20));
+        assertEquals(512, ExchangeUiModel.nextStorageRadius(300));
+        // 已超上限的值绕回默认 16
+        assertEquals(16, ExchangeUiModel.nextStorageRadius(700));
+        assertEquals(16, ExchangeUiModel.nextStorageRadius(Integer.MAX_VALUE));
     }
 
     @Test

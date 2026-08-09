@@ -592,14 +592,20 @@ final class ExchangeUiModel {
         return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
 
-    /** 存储浏览半径循环：16 -> 32 -> 64 -> 16（规格 6：16/32/64 + 自定义）；其它输入一律回到 16。 */
+    /**
+     * 仓储扫描半径档位（点击切换按钮）：16 → 32 → 64 → 128 → 256 → 512 → 648 → 16。
+     * 每击翻倍，达到最大 648 后重置为默认 16；非档位值（如历史输入残留）跳到下一个更大档位。
+     */
+    static final int[] STORAGE_RADIUS_STEPS = {16, 32, 64, 128, 256, 512, 648};
+
+    /** 点击切换后的下一个半径档位。 */
     static int nextStorageRadius(int currentRadius) {
-        return switch (currentRadius) {
-            case 16 -> 32;
-            case 32 -> 64;
-            case 64 -> 16;
-            default -> 16;
-        };
+        for (int step : STORAGE_RADIUS_STEPS) {
+            if (currentRadius < step) {
+                return step;
+            }
+        }
+        return STORAGE_RADIUS_STEPS[0];
     }
 
     /**

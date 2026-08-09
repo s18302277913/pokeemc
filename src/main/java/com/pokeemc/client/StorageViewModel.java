@@ -42,8 +42,8 @@ public final class StorageViewModel {
     public static final int RADIUS_PRESET_32 = 32;
     public static final int RADIUS_PRESET_128 = 128;
     public static final int DEFAULT_RADIUS = RADIUS_PRESET_32;
-    /** 客户端展示上限（服务端另有更严格的扫描预算上限，以服务端为准）。 */
-    public static final int MAX_RADIUS = 512;
+    /** 客户端展示上限（服务端扫描预算上限需同步 ≥648，见 StorageConfig / QueryStoragesPacket）。 */
+    public static final int MAX_RADIUS = 648;
 
     // —— 排序 ——
     public enum SortMode {

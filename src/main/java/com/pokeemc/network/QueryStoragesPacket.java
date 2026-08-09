@@ -42,7 +42,7 @@ public record QueryStoragesPacket(
         StorageQuery.Filter filter,
         int maxResults) implements CustomPacketPayload {
 
-    public static final int MAX_RADIUS = 512;
+    public static final int MAX_RADIUS = 648;
     public static final int MAX_SESSION_FIELD_LENGTH = 64;
 
     public static final Type<QueryStoragesPacket> TYPE = new Type<>(

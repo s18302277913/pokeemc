@@ -112,8 +112,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     private EditBox searchBox;
     /** 自定义数量输入（右栏购物车下方；选中购物车格时可用）。 */
     private EditBox quantityBox;
-    /** 范围输入框（左栏，默认 16，上限 256）。 */
-    private EditBox radiusBox;
+    /** 仓储扫描范围（点击切换按钮，见 mouseClicked / renderLeftPanel）；当前档位存于 {@link #storage}。 */
     /** 物品搜索框（过滤展开箱子的槽位）。 */
     private EditBox storageSearchBox;
     /** 物品搜索关键字（本地过滤）。 */
@@ -205,25 +204,9 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         this.quantityBox.setTextColorUneditable(0xFF303030);
         this.quantityBox.setValue("1");
         this.addWidget(this.quantityBox);
-        // 范围输入框（默认 16，上限 256）
-        this.radiusBox = new EditBox(this.font, 0, 0, 10, 10,
-                Component.literal("16"));
-        this.radiusBox.setMaxLength(3);
-        this.radiusBox.setFilter(s -> s.chars().allMatch(Character::isDigit));
-        this.radiusBox.setBordered(false);
-        this.radiusBox.setTextColor(0xFF303030);
-        this.radiusBox.setTextColorUneditable(0xFF303030);
-        this.radiusBox.setValue("16");
-        this.radiusBox.setResponder(s -> {
-            try {
-                int radius = Math.max(1, Math.min(256, Integer.parseInt(s.trim())));
-                storage.setRadius(radius);
-                requestStorages();
-            } catch (NumberFormatException ignored) {
-                // 非法输入保持原值
-            }
-        });
-        this.addWidget(this.radiusBox);
+        // [CHANGED] 仓储扫描范围：点击切换按钮（档位见 ExchangeUiModel.STORAGE_RADIUS_STEPS，
+        // 每击翻倍，最大 648 后重置默认 16）。默认档位 16，与旧输入框行为一致。
+        storage.setRadius(16);
         // 物品搜索框（过滤展开箱子的槽位；客户端本地过滤，不重新扫描）
         this.storageSearchBox = new EditBox(this.font, 0, 0, 10, 10,
                 Component.translatable("poketrade.gui.search"));
@@ -262,12 +245,6 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             storageSearchBox.setY(this.layout.storageSearch().y());
             storageSearchBox.setWidth(this.layout.storageSearch().width());
             storageSearchBox.setHeight(Math.max(10, this.layout.storageSearch().height()));
-        }
-        if (radiusBox != null) {
-            radiusBox.setX(this.layout.radiusInput().x());
-            radiusBox.setY(this.layout.radiusInput().y());
-            radiusBox.setWidth(this.layout.radiusInput().width());
-            radiusBox.setHeight(Math.max(10, this.layout.radiusInput().height()));
         }
     }
 
@@ -670,6 +647,12 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 StorageQuery.Sort.DISTANCE, StorageQuery.Filter.VIEWABLE, 200));
     }
 
+    /** [CHANGED] 点击切换仓储扫描半径档位（翻倍，最大 648 后重置 16），并重新发起扫描。 */
+    private void cycleStorageRadius() {
+        storage.setRadius(ExchangeUiModel.nextStorageRadius(storage.getRadius()));
+        requestStorages();
+    }
+
     @Override
     public void onQueryResponse(QueryStoragesPacket.Response response) {
         if (!sessionId.equals(response.sessionId())) {
@@ -876,9 +859,9 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             storageSearchBox.onClick(localX, localY);
             return true;
         }
-        if (radiusBox != null && layout.radiusInput().contains(localX, localY)) {
-            radiusBox.setFocused(true);
-            radiusBox.onClick(localX, localY);
+        // [CHANGED] 仓储扫描范围：点击切换档位（翻倍，最大 648 后重置 16）
+        if (button == 0 && layout.radiusInput().contains(localX, localY)) {
+            cycleStorageRadius();
             return true;
         }
         if (quantityBox != null && !rightCollapsed
@@ -1627,10 +1610,6 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 && storageSearchBox.charTyped(codePoint, modifiers)) {
             return true;
         }
-        if (radiusBox != null && radiusBox.isFocused()
-                && radiusBox.charTyped(codePoint, modifiers)) {
-            return true;
-        }
         if (quantityBox != null && !rightCollapsed && quantityBox.isFocused()
                 && quantityBox.charTyped(codePoint, modifiers)) {
             return true;
@@ -1668,15 +1647,6 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (storageSearchBox != null && storageSearchBox.isFocused()
                 && storageSearchBox.keyPressed(keyCode, scanCode, modifiers)) {
             return true;
-        }
-        if (radiusBox != null && radiusBox.isFocused()) {
-            if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
-                radiusBox.setFocused(false);
-                return true;
-            }
-            if (radiusBox.keyPressed(keyCode, scanCode, modifiers)) {
-                return true;
-            }
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
@@ -1796,9 +1766,6 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (this.storageSearchBox != null) {
             this.storageSearchBox.render(g, lmx, lmy, partialTick);
         }
-        if (this.radiusBox != null) {
-            this.radiusBox.render(g, lmx, lmy, partialTick);
-        }
         // 预览弹窗绘制在最顶层。真实根因（穿模）：GUI 主投影为
         // setOrtho(0.., 1000, 21000) + modelview translate(0,0,-11000)，深度随 z 单调递增——
         // 物品图标在 GuiGraphics.renderItem 内部 translate 到 z=150（深度≈0.49），比默认 z=0
@@ -1851,9 +1818,6 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         // 仓储名称搜索框凹槽
         PeStyle.inset(g, layout.storageSearch().x() - 1, layout.storageSearch().y() - 1,
                 layout.storageSearch().width() + 2, layout.storageSearch().height() + 2, 0xFF9E9E9E);
-        // 范围输入框凹槽
-        PeStyle.inset(g, layout.radiusInput().x() - 1, layout.radiusInput().y() - 1,
-                layout.radiusInput().width() + 2, layout.radiusInput().height() + 2, 0xFF9E9E9E);
         if (!leftCollapsed) {
             PeStyle.inset(g, layout.left().x(), layout.left().y(),
                     layout.left().width(), layout.left().height(), 0xFFA8A8A8);
@@ -2403,9 +2367,13 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
 
     /** 左栏内容：仓储列表 + 选中仓储快照槽位（渲染在 translate 内，用相对坐标）。 */
     private void renderLeftPanel(GuiGraphics g, int x, int y) {
-        // 范围行：标签 + 输入框（输入框在 render() 中绘制）
+        // 范围行：标签 + 点击切换按钮（显示当前档位；selected 高亮表示当前生效值）
         g.drawString(this.font, t("poketrade.gui.range"),
                 layout.left().x() + 2, layout.radiusInput().y() + 2, PeStyle.TEXT);
+        ExchangeUiModel.Rect radiusCtrl = layout.radiusInput();
+        PeStyle.segmented(g, this.font, radiusCtrl.x(), radiusCtrl.y(),
+                radiusCtrl.width(), radiusCtrl.height(),
+                String.valueOf(storage.getRadius()), true, false, 0, 0);
         // 物品搜索提示
         if (storageSearchBox != null && storageSearchBox.getValue().isEmpty()
                 && !storageSearchBox.isFocused()) {

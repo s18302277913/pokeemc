@@ -199,3 +199,19 @@ _（后续会话按时间倒序追加于此）_
 - [x] 穿模修复完成，验证链全绿：`compileJava` → `:test` 全量 → `runGameTestServer`（**40/40**）→ `build --offline`。
 - [ ] **UI 层修复依赖运行时验证**：本修复基于反编译实证（投影矩阵/深度映射/RenderType state），GameTest 无法覆盖客户端渲染；请在游戏中打开交易所→批量出售弹窗，确认弹窗背景不透明盖住中间列表/钱包/页数、无穿模，且右键菜单同样正常。
 - [ ] 自动找槽 NBT 丢弃边界：如后续支持 NBT 物品自动入仓，需在 `findDepositSlot`/`simulateInsert` 增加组件比较（可维护项）。
+
+### [2026-08-09 13:34] 会话 #9 — 仓储搜索范围 UI 改造为点击切换按钮（16→…→648→16）
+
+### 🎯 本次需求
+玩家反馈：优化仓储搜索范围 UI，由输入框改为**点击切换按钮**——点一下范围翻倍，最大 648 后重置为默认值 16。
+
+经确认：目标界面为交易所/转化桌界面（ExchangeScreen）；最大挡位 648，需同步提升服务端扫描预算上限。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-33（范围 UI 由自由输入改为挡位循环按钮）**：移除 `ExchangeScreen` 的 `radiusBox`（EditBox 自由输入）与其全部键盘/布局/渲染接线，改为左栏「范围：」标签 + 点击切换按钮。按钮复用 `PeStyle.segmented`（selected 高亮展示当前生效值），点击区域即原输入框矩形 `layout.radiusInput()`（`left.x+34, left.y+2, 92×12`）。循环序列收敛到单一静态来源 `ExchangeUiModel.STORAGE_RADIUS_STEPS = {16, 32, 64, 128, 256, 512, 648}`，`nextStorageRadius()` 每击取下一个更大挡位、末档绕回 16，非挡位残留值（历史/未知状态）跳到下一个更大挡位保证循环不中断。[CHANGED] `ExchangeScreen.java`（移除 radiusBox 字段/接线，新增 `cycleStorageRadius()`，renderLeftPanel 用 segmented 渲染，构造中 `storage.setRadius(16)` 锁定默认挡位）、`ExchangeUiModel.java`（新增 STORAGE_RADIUS_STEPS + nextStorageRadius，替代原 16→32→64→16 死代码序列）。
+- **ADR-34（为 648 挡位同步提升服务端 clamp 链，三处上限一致化）**：交易所最大挡位 648 需整条链路放行，避免服务端静默截断造成「按钮显示 648、实际扫描 128/512」的幻觉。三处上限同步 512/128→648：① `StorageConfig.MAX_PLAYER_RADIUS`/`MAX_ADMIN_RADIUS`（原 128/256，玩家与管理员上限统一为 648——大范围扫描受 `MAX_SCANNED_PER_QUERY=2000` 硬上限保护，超预算部分标记结果不完整，不会无限扫描）；② `QueryStoragesPacket.MAX_RADIUS`（原 512，服务端 `executeQuery` 仍 `Math.max(1, Math.min(radius, 648))` 二次钳制）；③ `StorageViewModel.MAX_RADIUS`（原 512，客户端展示/钳制上限）。`StorageBrowserScreen`（独立浏览器）未改 UI，仅间接允许其输入到 648。[CHANGED] `StorageConfig.java`、`QueryStoragesPacket.java`、`StorageViewModel.java`。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [x] 改造完成，验证链全绿：`compileJava` → `:test` 全量（642 项，含新增 `storageScopeSnapsNonStepValuesToNextLargerStepOrDefault`，并修正两处引用旧上限 512/128 的断言为常量引用）→ `runGameTestServer`（**40/40**）→ `build --offline`。
+- [ ] **性能风险注意**：648 半径扫描（约 1.3M 方块区）依赖区块加载与 `MAX_SCANNED_PER_QUERY=2000` 硬上限截断；实际游戏若发现大范围查询造成服务端卡顿，可将 `StorageConfig.MAX_PLAYER_RADIUS`/`MAX_ADMIN_RADIUS` 回调为 512（同时降 `StorageViewModel`/`QueryStoragesPacket` 上限，注意三者一致），或保留 UI 上限仅收紧服务端预算。
+- [ ] **UI 交互依赖运行时验证**：GameTest 无法覆盖客户端渲染/点击，请在游戏中打开交易所→点击「范围」按钮确认依次 16→32→64→128→256→512→648→16 循环、每击触发重新扫描，且按钮高亮与文本正常。

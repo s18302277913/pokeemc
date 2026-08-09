@@ -122,7 +122,8 @@ class StorageViewModelTest {
         StorageViewModel vm = new StorageViewModel();
         vm.setRadius(10000);
         assertTrue(vm.isRadiusOverLimit());
-        assertEquals(512, vm.getRadius());
+        // 超限钳制到客户端展示上限（会话 #9 提升到 648）
+        assertEquals(StorageViewModel.MAX_RADIUS, vm.getRadius());
         vm.setRadius(128);
         assertFalse(vm.isRadiusOverLimit());
     }
