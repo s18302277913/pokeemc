@@ -56,6 +56,33 @@
 
 ## 会话记录存档区
 
+### [2026-08-09 11:24] 会话 #5 — double trapped chest 复核：误判更正 + 回归测试固化
+
+### 🎯 本次需求
+核实会话 #4 遗留 TODO：「double trapped chest 仅暴露 27 槽」是否真实，真实则修复。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-23（复核结论：误判，无功能缺陷）**：上一会话误以为 `TrappedChestBlock` 仅继承
+  `AbstractChestBlock`（与 `ChestBlock` 平级），据此推断 `ChestPairSupport.isDoubleChest` 的
+  `instanceof ChestBlock` 判定会漏掉陷阱箱、导致配对失效只暴露 27 槽。**实测推翻该假设**：
+  MC 1.21.1 下 `ChestBlock.class.isAssignableFrom(TrappedChestBlock.class) == true`
+  （`TrappedChestBlock extends ChestBlock`，共享 `ChestBlock.TYPE` 属性），双箱配对逻辑对陷阱箱
+  同样成立。`VanillaTrappedChestAdapter` 单 typeId 单双通吃，功能完整。
+- **ADR-24（复核即修复 = 回归测试固化）**：确认**无运行时代码变更需求**。本次仅新增两类回归测试
+  固化行为，防止未来 MC 类结构变更引发回归：
+  - 单测 `ChestPairSupportTest.trappedChestIsChestFamilyMember`：固化 `TrappedChestBlock extends ChestBlock` 继承断言（结构变更即测试失败）。
+  - GameTest `StorageAdapterGameTests.doubleTrappedChestExposesAllSlots`：双陷阱箱 54 槽、双半区
+    canonicalize 归一主半区、槽位写入落到真实半区容器、拆分后降级 27 槽。
+  不引入 `vanilla_double_trapped_chest` 新 typeId——现有方案功能完整，加 typeId 还需额外 claim
+  迁移逻辑，收益为负。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [x] 复核完成：**无缺陷**，新增 1 单测 + 1 GameTest 回归固化；`:test` 全量 + `runGameTestServer`
+      **40/40 通过**。
+- [ ] **已知边界（非缺陷，记录）**：trapped 双箱 typeId 仍为 `vanilla_trapped_chest`（单双共用），
+      UI label 显示 "Trapped Chest"（普通 chest 双箱显示 "Double Chest"）。纯显示差异，不影响调用
+      全部格子；如玩家期望显示区分可后续立项加双变体文案。
+
 ### [2026-08-09 11:12] 会话 #4 — 三个功能 Bug 修复（大箱子兼容 / 购物车 UI / 转化桌回收价）
 
 ### 🎯 本次需求
@@ -74,7 +101,7 @@
 
 ### ⚠️ 遗留风险与待办 (TODOs)
 - [x] 三个 Bug 全部修复并通过全量回归（`compileJava/compileTestJava` → `:test` → `runGameTestServer` 39/39 → `build`）。
-- [ ] **已记录未修复**：double **trapped chest** 仅暴露 27 槽——`StorageProtectionEvents.typeIdFor` 对 `TrappedChestBlock` 返回 `vanilla_trapped_chest`，无 double-chest variant（普通 chest 有 `vanilla_double_chest`）。修复方向：`ChestPairSupport` 检测成对 trapped chest 时映射到 double variant（或新增 `vanilla_double_trapped_chest`）。暂缓，待用户确认是否纳入本次范围。
+- [x] ~~**已记录未修复**：double **trapped chest** 仅暴露 27 槽~~ **[REVISED] 会话 #5 复核：此为误判，无功能缺陷**——`TrappedChestBlock` 在 MC 1.21.1 继承 `ChestBlock`，`ChestPairSupport.isDoubleChest` 判定成立，双陷阱箱已正确暴露 54 槽（GameTest `doubleTrappedChestExposesAllSlots` 实证通过，见会话 #5）。已知边界：trapped 双箱 typeId 仍为 `vanilla_trapped_chest`（单双共用），UI label 显示 "Trapped Chest" 而非 "Double Trapped Chest"——纯显示差异，不影响调用全部格子。
 - [ ] **行为变更提示**：[BREAKING CHANGES] master_ball sell 语义变更已记录于 ADR-22；旧存档/数据包无需迁移（尊重 sell=0 即保持原行为）。
 
 ### [2026-08-09 10:29] 会话 #3 — 官方 API 合规审计（Batch 4）：弃用/待删 API 清零（commit `3209932`）

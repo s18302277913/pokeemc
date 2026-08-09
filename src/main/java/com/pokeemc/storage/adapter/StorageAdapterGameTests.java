@@ -39,6 +39,7 @@ public class StorageAdapterGameTests {
     private static final String BATCH = "storage";
     private static final String DOUBLE_CHEST = "vanilla_double_chest";
     private static final String SINGLE_CHEST = "vanilla_chest";
+    private static final String TRAPPED_CHEST = "vanilla_trapped_chest";
     private static final String BARREL = "vanilla_barrel";
     private static final String CONDENSER = "poketrade_condenser";
 
@@ -96,6 +97,67 @@ public class StorageAdapterGameTests {
         check(!doubleAdapter.supports(ctxOf(dim, DOUBLE_CHEST, secondaryAbs)), "double adapter must stop supporting after split");
         check(singleAdapter.supports(ctxOf(dim, SINGLE_CHEST, secondaryAbs)), "remaining half must become a single chest");
         try (StorageHandle hSingle = singleAdapter.open(ctxOf(dim, SINGLE_CHEST, secondaryAbs)).orElseThrow()) {
+            check(((StorageHandleExt) hSingle).slotCount() == 27, "remaining half must expose 27 slots");
+        }
+
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void doubleTrappedChestExposesAllSlots(GameTestHelper helper) {
+        // Bug #9 复核：双陷阱箱复用同一 VanillaTrappedChestAdapter（typeId 单双通吃），
+        // 配对逻辑必须暴露 54 槽并归一主半区——与普通双箱行为完全一致（TrappedChestBlock
+        // 继承 ChestBlock，共享 TYPE 属性，ChestPairSupport 可正常配对）。
+        ServerLevel level = helper.getLevel();
+        String dim = level.dimension().location().toString();
+        StorageAdapterRegistryImpl registry = StorageServices.registry();
+        StorageAdapter trappedAdapter = adapter(registry, TRAPPED_CHEST);
+
+        BlockState facingNorth = Blocks.TRAPPED_CHEST.defaultBlockState()
+                .setValue(ChestBlock.FACING, Direction.NORTH);
+        BlockPos primaryRel = new BlockPos(1, 1, 1);
+        BlockPos secondaryRel = new BlockPos(2, 1, 1);
+        helper.setBlock(primaryRel, facingNorth);
+        helper.setBlock(secondaryRel, facingNorth.setValue(ChestBlock.TYPE, ChestType.RIGHT));
+        BlockPos primaryAbs = helper.absolutePos(primaryRel);
+        BlockPos secondaryAbs = helper.absolutePos(secondaryRel);
+
+        // 同一适配器必须匹配两个半区
+        check(trappedAdapter.supports(ctxOf(dim, TRAPPED_CHEST, primaryAbs)),
+                "trapped adapter must support primary half");
+        check(trappedAdapter.supports(ctxOf(dim, TRAPPED_CHEST, secondaryAbs)),
+                "trapped adapter must support secondary half");
+
+        // 无论从哪一半访问，规范化后都是同一 StorageKey，且归一为主半区位置
+        StorageKey keyFromPrimary = registry.canonicalize(
+                StorageKey.of(dim, TRAPPED_CHEST, AbstractContainerAdapter.toLocation(primaryAbs)));
+        StorageKey keyFromSecondary = registry.canonicalize(
+                StorageKey.of(dim, TRAPPED_CHEST, AbstractContainerAdapter.toLocation(secondaryAbs)));
+        check(keyFromPrimary.equals(keyFromSecondary),
+                "canonicalized key must be identical from both halves: " + keyFromPrimary + " vs " + keyFromSecondary);
+
+        // 统一槽位顺序 + 物理部件集合：写入经槽位落到真实半区容器
+        try (StorageHandle hPrimary = trappedAdapter.open(ctxOf(dim, TRAPPED_CHEST, primaryAbs)).orElseThrow();
+             StorageHandle hSecondary = trappedAdapter.open(ctxOf(dim, TRAPPED_CHEST, secondaryAbs)).orElseThrow()) {
+            check(((StorageHandleExt) hPrimary).slotCount() == 54, "double trapped chest must expose 54 slots");
+            hPrimary.commitInsert(0, "minecraft:dirt", 2);
+            hPrimary.commitInsert(27, "minecraft:stone", 3);
+            check(hPrimary.snapshot().slots().equals(hSecondary.snapshot().slots()),
+                    "slot snapshots from both halves must be identical");
+
+            ChestBlockEntity chestA = (ChestBlockEntity) level.getBlockEntity(primaryAbs);
+            ChestBlockEntity chestB = (ChestBlockEntity) level.getBlockEntity(secondaryAbs);
+            check(chestA != null && chestA.getItem(0).getItem() == Items.DIRT && chestA.getItem(0).getCount() == 2,
+                    "slot 0 must write to primary half trapped chest container");
+            check(chestB != null && chestB.getItem(0).getItem() == Items.STONE && chestB.getItem(0).getCount() == 3,
+                    "slot 27 must write to secondary half trapped chest container");
+        }
+
+        // 拆分：移除主半区后，次半区仍由同一适配器按单箱暴露 27 槽
+        helper.destroyBlock(primaryRel);
+        check(trappedAdapter.supports(ctxOf(dim, TRAPPED_CHEST, secondaryAbs)),
+                "trapped adapter must keep supporting after split");
+        try (StorageHandle hSingle = trappedAdapter.open(ctxOf(dim, TRAPPED_CHEST, secondaryAbs)).orElseThrow()) {
             check(((StorageHandleExt) hSingle).slotCount() == 27, "remaining half must expose 27 slots");
         }
 

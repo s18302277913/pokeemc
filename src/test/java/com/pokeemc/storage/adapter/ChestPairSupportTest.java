@@ -1,6 +1,9 @@
 package com.pokeemc.storage.adapter;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.AbstractChestBlock;
+import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.block.TrappedChestBlock;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -39,5 +42,15 @@ class ChestPairSupportTest {
     void primaryOfIsStableForIdenticalPositions() {
         BlockPos p = new BlockPos(3, 64, 3);
         assertEquals(p, ChestPairSupport.primaryOf(p, p));
+    }
+
+    @Test
+    void trappedChestIsChestFamilyMember() {
+        // 实证 MC 1.21.1 类继承：TrappedChestBlock extends ChestBlock（共享 TYPE 属性）。
+        // 因此 ChestPairSupport.isDoubleChest 的 instanceof ChestBlock 判定对陷阱箱同样生效，
+        // 双陷阱箱可正常走 DoubleContainer 分支（Bug #9 复核结论：无配对逻辑缺陷）。
+        assertTrue(ChestBlock.class.isAssignableFrom(TrappedChestBlock.class),
+                "MC 结构变更会导致本断言失效，需复查双箱配对逻辑");
+        assertTrue(AbstractChestBlock.class.isAssignableFrom(ChestBlock.class));
     }
 }
