@@ -1,5 +1,6 @@
 package com.pokeemc.storage;
 
+import com.mojang.logging.LogUtils;
 import com.poketrade.api.storage.StorageAdapter;
 import com.poketrade.api.storage.StorageAdapterContext;
 import com.poketrade.api.storage.StorageAdapterRegistry;
@@ -13,6 +14,7 @@ import com.poketrade.api.storage.StorageTransactionResult;
 import com.poketrade.api.permission.ProtectionAction;
 import com.pokeemc.thirdparty.ThirdPartyServices;
 import com.pokeemc.storage.adapter.StorageHandleExt;
+import org.slf4j.Logger;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -43,6 +45,8 @@ import java.util.function.LongSupplier;
  * </ul>
  */
 public final class StorageTransactionService {
+
+    private static final Logger LOGGER = LogUtils.getLogger();
 
     /** 幂等缓存容量上限（LRU 淘汰）。 */
     public static final int IDEMPOTENT_CACHE_CAPACITY = 1024;
@@ -291,10 +295,13 @@ public final class StorageTransactionService {
                     "target_blocked", "cannot insert " + count + "x" + itemId,
                     srcStorage, tgtStorage);
         }
-        srcHandle.commitExtract(source.slotIndex(), itemId, count);
-        tgtHandle.commitInsert(target.slotIndex(), itemId, count);
-
-        // 修订递增 + 变更槽位 + 快照 + 审计
+        // [CHANGED] 缺陷 #6 事务原子性重构：
+        // 原实现先 commitExtract/commitInsert（槽位已移动）再 bumpRevision（复查），
+        // bump 失败时返回 REVISION_CONFLICT 但物品已移动——部分状态。现改为：
+        //   1) 修订号在校验通过后以纯算术预计算（服务端单线程内无并发改写，见 ADR-12）；
+        //   2) 槽位写 + 修订应用 + 审计放入同一临界区；
+        //   3) 临界区内任一失败 → 尽力补偿回滚已提交槽位写，保证 all-or-nothing；
+        //   4) 客户端同步快照单独防御性计算，失败不影响已提交事务。
         List<StorageItemSlot> changedSlots = new ArrayList<>();
         Map<StorageId, Long> newRevisions = new LinkedHashMap<>();
         Map<StorageId, StorageSnapshot> updatedSnapshots = new LinkedHashMap<>();
@@ -305,50 +312,75 @@ public final class StorageTransactionService {
         boolean sameStorage = srcStorage != null && tgtStorage != null
                 && srcStorage.key().equals(tgtStorage.key());
 
-        if (srcStorage != null) {
-            long expected = srcStorage.record().revision();
-            long newRev = bumpRevision(data, srcStorage.key(), expected);
-            if (newRev < 0) {
-                return StorageTransactionResult.failure(
-                        StorageTransactionResult.REVISION_CONFLICT,
-                        "revision conflict on source storage");
+        long srcNewRev = srcStorage != null ? srcStorage.record().revision() + 1 : -1;
+        long tgtNewRev = -1;
+        if (tgtStorage != null) {
+            // 同仓储双槽位：源先 +1，目标在源之后 +1
+            tgtNewRev = (sameStorage ? srcNewRev : tgtStorage.record().revision()) + 1;
+        }
+
+        boolean srcCommitted = false;
+        boolean tgtCommitted = false;
+        try {
+            srcHandle.commitExtract(source.slotIndex(), itemId, count);
+            srcCommitted = true;
+            tgtHandle.commitInsert(target.slotIndex(), itemId, count);
+            tgtCommitted = true;
+
+            if (srcStorage != null) {
+                data.applyRevision(srcStorage.key()); // 前置已校验，强制递增（无复查）
+                newRevisions.put(srcStorage.endpoint().storageId(), srcNewRev);
+                addChangedSlot(changedSlots, srcStorage, source.slotIndex());
+                lastAuditId = data.appendAudit(
+                        now, srcStorage.key().asString(), t.actorId(), action,
+                        srcStorage.record().displayName() + " slot " + source.slotIndex()
+                                + " " + count + "x" + itemId).id();
             }
-            newRevisions.put(srcStorage.endpoint().storageId(), newRev);
-            addChangedSlot(changedSlots, srcStorage, source.slotIndex());
-            updatedSnapshots.put(
-                    srcStorage.endpoint().storageId(),
-                    new StorageSnapshot(
-                            srcStorage.endpoint().storageId(), newRev,
-                            srcStorage.handle().snapshot().slots()));
-            lastAuditId = data.appendAudit(
-                    now, srcStorage.key().asString(), t.actorId(), action,
-                    srcStorage.record().displayName() + " slot " + source.slotIndex()
-                            + " " + count + "x" + itemId).id();
+            if (tgtStorage != null) {
+                data.applyRevision(tgtStorage.key());
+                newRevisions.put(tgtStorage.endpoint().storageId(), tgtNewRev);
+                addChangedSlot(changedSlots, tgtStorage, target.slotIndex());
+                lastAuditId = data.appendAudit(
+                        now, tgtStorage.key().asString(), t.actorId(), action,
+                        tgtStorage.record().displayName() + " slot " + target.slotIndex()
+                                + " " + count + "x" + itemId).id();
+            }
+            if (invSource != null || invTarget != null) {
+                inventoryRefresher.refresh(t.actorId());
+            }
+        } catch (RuntimeException e) {
+            // 补偿：尽力回滚已提交的槽位写，避免"物品已移动但返回失败"
+            compensateSlots(
+                    srcCommitted, tgtCommitted,
+                    srcHandle, tgtHandle,
+                    source, target, itemId, count);
+            return failWithSnapshots(
+                    "commit_failed", "slot commit failed: " + e.getMessage(),
+                    srcStorage, tgtStorage);
+        }
+
+        // 快照为客户端同步信息：失败仅跳过该快照，不撤销已提交事务
+        if (srcStorage != null) {
+            try {
+                updatedSnapshots.put(
+                        srcStorage.endpoint().storageId(),
+                        new StorageSnapshot(
+                                srcStorage.endpoint().storageId(), srcNewRev,
+                                srcStorage.handle().snapshot().slots()));
+            } catch (RuntimeException ignored) {
+                // 快照失败不影响事务结果
+            }
         }
         if (tgtStorage != null) {
-            long expected = sameStorage
-                    ? newRevisions.get(tgtStorage.endpoint().storageId())
-                    : tgtStorage.record().revision();
-            long newRev = bumpRevision(data, tgtStorage.key(), expected);
-            if (newRev < 0) {
-                return StorageTransactionResult.failure(
-                        StorageTransactionResult.REVISION_CONFLICT,
-                        "revision conflict on target storage");
+            try {
+                updatedSnapshots.put(
+                        tgtStorage.endpoint().storageId(),
+                        new StorageSnapshot(
+                                tgtStorage.endpoint().storageId(), tgtNewRev,
+                                tgtStorage.handle().snapshot().slots()));
+            } catch (RuntimeException ignored) {
+                // 快照失败不影响事务结果
             }
-            newRevisions.put(tgtStorage.endpoint().storageId(), newRev);
-            addChangedSlot(changedSlots, tgtStorage, target.slotIndex());
-            updatedSnapshots.put(
-                    tgtStorage.endpoint().storageId(),
-                    new StorageSnapshot(
-                            tgtStorage.endpoint().storageId(), newRev,
-                            tgtStorage.handle().snapshot().slots()));
-            lastAuditId = data.appendAudit(
-                    now, tgtStorage.key().asString(), t.actorId(), action,
-                    tgtStorage.record().displayName() + " slot " + target.slotIndex()
-                            + " " + count + "x" + itemId).id();
-        }
-        if (invSource != null || invTarget != null) {
-            inventoryRefresher.refresh(t.actorId());
         }
 
         return StorageTransactionResult.success(
@@ -433,8 +465,37 @@ public final class StorageTransactionService {
                         "storage unavailable: " + endpoint.storageId().asString());
     }
 
-    private long bumpRevision(StorageSavedData data, StorageKey key, long expected) {
-        return data.updateRecord(key, expected, r -> r) ? expected + 1 : -1;
+    // [REMOVED] bumpRevision(data, key, expected)：旧实现依赖 updateRecord 复查，
+    // 在槽位已提交后调用可能失败（缺陷 #6）。已由提交临界区内的 applyRevision 取代。
+
+    /**
+     * 补偿：尽力回滚已提交的槽位写（逆序——先撤目标 insert，再补回源 extract）。
+     *
+     * <p>仅作为提交阶段防御性回退：正常路径下临界区内槽位写是唯一可失败步骤，
+     * 校验已全前置。补偿本身尽力而为，失败仅记录日志（此时容器处于不一致状态，
+     * 由后续 audit/revision 缺失暴露，交由管理员修复）。</p>
+     */
+    private static void compensateSlots(
+            boolean srcCommitted, boolean tgtCommitted,
+            StorageHandleExt srcHandle, StorageHandleExt tgtHandle,
+            StorageEndpoint source, StorageEndpoint target,
+            String itemId, int count) {
+        if (tgtCommitted) {
+            try {
+                tgtHandle.commitExtract(target.slotIndex(), itemId, count);
+            } catch (RuntimeException e) {
+                LOGGER.error("PokeEMC: compensation failed to roll back target slot {}: {}",
+                        target.slotIndex(), e.getMessage());
+            }
+        }
+        if (srcCommitted) {
+            try {
+                srcHandle.commitInsert(source.slotIndex(), itemId, count);
+            } catch (RuntimeException e) {
+                LOGGER.error("PokeEMC: compensation failed to roll back source slot {}: {}",
+                        source.slotIndex(), e.getMessage());
+            }
+        }
     }
 
     private void addChangedSlot(

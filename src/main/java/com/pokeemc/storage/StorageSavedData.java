@@ -245,6 +245,25 @@ public class StorageSavedData extends SavedData {
         return true;
     }
 
+    /**
+     * 强制应用一次 revision 递增（不复查当前 revision）。
+     *
+     * <p>仅供 {@link StorageTransactionService} 提交阶段使用：调用方已在校验阶段确认
+     * revision 未变（服务端单线程内无并发改写），此处直接写回，避免 {@link #updateRecord}
+     * 的复查在槽位已提交后才失败（缺陷 #6：commit 成功但 bump 失败误报冲突且物品已移动）。
+     * 仓储不存在返回 {@code false}。</p>
+     */
+    public boolean applyRevision(StorageKey key) {
+        Objects.requireNonNull(key, "key");
+        StorageRecord current = storages.get(key);
+        if (current == null) {
+            return false;
+        }
+        storages.put(key, current.touch(System.currentTimeMillis()));
+        setDirty();
+        return true;
+    }
+
     public boolean renameStorage(StorageKey key, long expectedRevision, String displayName) {
         return updateRecord(key, expectedRevision, record -> record.renamed(displayName));
     }

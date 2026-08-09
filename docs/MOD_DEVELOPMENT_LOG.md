@@ -56,4 +56,21 @@
 
 ## 会话记录存档区
 
+### [2026-08-09] 会话 #2 — 官方 API 标准重做：摸底完成，方案提交
+
+### 🎯 本次需求
+"严格按照官方api标准重做pokeemc"。会话 #1 已立 ADR-1~8，本轮执行摸底并提交重做执行方案。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-9（基线固化）**：已 `git init` 并提交基线 commit `2b77ec5`（.gitignore 排除 run/build/.gradle/logs/*.jar）。`gradlew build --offline -x test` 验证 **BUILD SUCCESSFUL**，重做起点绿色。
+- **ADR-10（缺陷 #8 实锤）**：`DefaultPkmValues.PIXELMON`（master_ball=32768）为**死代码**，全工程无人读取；运行时权威源为数据包 `data/poketrade/pkm/pixelmon.json`（master_ball=5000000）。两者相差 152 倍。重做需定一为权威，待用户确认方向。
+- **ADR-11（缺陷 #7 实锤）**：`StorageCommands.replaceSavedData()` 对 rename/repair/unclaim 走 `encode→NBT改→decode→set` 热替换绕路，用硬编码序列化键（KEY_STORAGES 等）复制 encode/decode 格式，实例替换使其他服务持有的引用失效。重做改为 StorageSavedData 直接公开 API（已存在 deleteStorage/renameStorage/repairTemplateReferences，缺 rebuildChunkIndex）。
+- **ADR-12（缺陷 #6 实锤）**：`StorageTransactionService.doExecute` 第 294-295 行先 `commitExtract/commitInsert`，第 310/332 行后 `bumpRevision`——bump 失败时物品已移动却报冲突。重做改为"全量校验前置 + 槽位写/revision/审计单临界"。
+- **[DEPRECATED] 根目录 `docs/MOD_DEVELOPMENT_LOG.md`**：本会话误建于工程根，正确位置为 `_modref/pokeemc/docs/`，已清理并归档至此。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [ ] **ADR-13（用户拍板）**：① 缺陷 #8 → 数据包为准，删除死代码 `DefaultPkmValues.PIXELMON`；② Datagen → 本轮不引入，保留手写 JSON（后续单独立项）。
+- [ ] 待执行批次：Batch1 事务原子性 → Batch2 SavedData 热替换消除 → Batch3 PIXELMON 删死代码 → Batch4 全模块 API 合规审计 + 测试迁移。
+- [ ] 基线 commit `2b77ec5` 为回退锚点。
+
 _（后续会话按时间倒序追加于此）_
