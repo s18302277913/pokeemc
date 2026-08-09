@@ -9,6 +9,7 @@ import com.pokeemc.storage.StorageRecord;
 import com.pokeemc.storage.StorageSavedData;
 import com.pokeemc.storage.StorageServices;
 import com.pokeemc.storage.adapter.AbstractContainerAdapter;
+import com.pokeemc.storage.adapter.PokeballIdentity;
 import com.pokeemc.storage.adapter.StorageHandleExt;
 import com.pokeemc.storage.adapter.VanillaEnderChestAdapter;
 import com.poketrade.api.storage.StorageAdapter;
@@ -17,7 +18,6 @@ import com.poketrade.api.storage.StorageHandle;
 import com.poketrade.api.storage.StorageId;
 import io.netty.buffer.ByteBuf;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
@@ -176,8 +176,14 @@ public record StorageDepositCarriedPacket(
             }
             if (packet.targetSlot() < 0) {
                 // 自动找槽位（拖到仓储列表项/空白处转移）
-                int auto = StorageDepositPacket.findDepositSlot(
-                        ext, BuiltInRegistries.ITEM.getKey(carried.getItem()).toString(), packet.count());
+                // [CHANGED] Bug 1 残留：itemId 必须经 PokeballIdentity.encode，
+                // 否则大师球等组件区分物品在找槽合并时降级为普通精灵球。
+                String carriedId = PokeballIdentity.encode(carried);
+                if (carriedId == null) {
+                    return new StorageDepositPacket.Response(packet.sessionId(), false, "invalid_request",
+                            "carried item has no registry id", 0, 1);
+                }
+                int auto = StorageDepositPacket.findDepositSlot(ext, carriedId, packet.count());
                 if (auto < 0) {
                     return new StorageDepositPacket.Response(packet.sessionId(), false, "target_blocked",
                             "target storage has no room", 0, 1);
@@ -204,8 +210,9 @@ public record StorageDepositCarriedPacket(
             return new StorageDepositPacket.Response(packet.sessionId(), false, "invalid_request",
                     "carried item missing or count too high", 0, 1);
         }
-        ResourceLocation id = BuiltInRegistries.ITEM.getKey(carried.getItem());
-        String itemId = id == null ? null : id.toString();
+        // [CHANGED] Bug 1 残留：拖入存入取 itemId 必须经 PokeballIdentity.encode
+        // （pixelmon:poke_ball#master_ball），否则球类组件丢失、大师球降级为精灵球。
+        String itemId = PokeballIdentity.encode(carried);
         if (itemId == null) {
             return new StorageDepositPacket.Response(packet.sessionId(), false, "invalid_request",
                     "carried item has no registry id", 0, 1);

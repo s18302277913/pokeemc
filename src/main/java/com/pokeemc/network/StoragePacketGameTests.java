@@ -4,6 +4,12 @@ import com.pokeemc.menu.StorageBrowserMenu;
 import com.pokeemc.storage.StorageKey;
 import com.pokeemc.storage.StorageRecord;
 import com.pokeemc.storage.StorageSavedData;
+import com.pokeemc.storage.adapter.MinecraftSlotStore;
+import com.pixelmonmod.api.registry.RegistryValue;
+import com.pixelmonmod.pixelmon.api.pokemon.item.pokeball.PokeBall;
+import com.pixelmonmod.pixelmon.api.pokemon.item.pokeball.PokeBallRegistry;
+import com.pixelmonmod.pixelmon.init.registry.PixelmonDataComponents;
+import com.pixelmonmod.pixelmon.items.PokeBallItem;
 import com.poketrade.api.storage.StorageId;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -129,6 +135,66 @@ public class StoragePacketGameTests {
                         sidOf(keyA), 0, 0L, sidOf(keyA), 5, rev, rev));
         check(helper, !r.success() && "invalid_request".equals(r.code()),
                 "同仓储转移应拒绝，实际 " + r.code());
+        helper.succeed();
+    }
+
+    /**
+     * [CHANGED] Bug 1 回归：Pixelmon 所有球类共用 {@code pixelmon:poke_ball} 注册键，
+     * 球种由 PokeBall DataComponent 区分。仓储存取必须保留球种身份——
+     * itemId 编码为 {@code pixelmon:poke_ball#master_ball}，写回时还原组件，
+     * 大师球不允许降级成普通精灵球。
+     */
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void pokeballVariantSurvivesStorageRoundTrip(GameTestHelper helper) {
+        FakePlayer p = player(helper);
+        BlockPos pos = BlockPos.containing(helper.absoluteVec(new Vec3(1, 0, 1)));
+        p.setPos(pos.getX() + 1.5, pos.getY(), pos.getZ() + 0.5);
+        claimChest(helper, p, pos);
+        ChestBlockEntity chest = chestAt(helper, pos);
+
+        RegistryValue<PokeBall> master = PokeBallRegistry.getPokeBall("master_ball");
+        check(helper, master != null && master.isInitialized(), "Pixelmon master_ball 应已注册");
+        ItemStack original = PokeBallItem.of(master.get(), 1);
+        chest.setItem(0, original);
+
+        MinecraftSlotStore store = MinecraftSlotStore.of(chest);
+        String encoded = store.itemId(0);
+        check(helper, "pixelmon:poke_ball#master_ball".equals(encoded),
+                "大师球 itemId 应编码球种，实际 " + encoded);
+
+        // 写回：同样经身份解码还原组件，容器里仍是大师球
+        store.set(0, encoded, 1);
+        ItemStack restored = chest.getItem(0);
+        RegistryValue<PokeBall> ball = restored.get(PixelmonDataComponents.POKE_BALL.get());
+        check(helper, ball != null && "master_ball".equals(ball.get().getName()),
+                "写回后容器里的球应保持 master_ball，实际 " + restored);
+        helper.succeed();
+    }
+
+    /**
+     * [CHANGED] Bug 1 回归：拖入存入（carried）是真实玩家操作路径，
+     * 服务端取 itemId 必须经 {@link PokeballIdentity#encode} 编码球种——
+     * 拖入大师球后容器里仍应是大师球，不允许降级为普通精灵球。
+     */
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void carriedDepositKeepsPokeballVariant(GameTestHelper helper) {
+        FakePlayer p = player(helper);
+        BlockPos pos = BlockPos.containing(helper.absoluteVec(new Vec3(1, 0, 1)));
+        p.setPos(pos.getX() + 1.5, pos.getY(), pos.getZ() + 0.5);
+        StorageKey key = claimChest(helper, p, pos);
+        long rev = revisionOf(helper, key);
+
+        RegistryValue<PokeBall> master = PokeBallRegistry.getPokeBall("master_ball");
+        check(helper, master != null && master.isInitialized(), "Pixelmon master_ball 应已注册");
+        p.containerMenu.setCarried(PokeBallItem.of(master.get(), 1));
+
+        StorageDepositPacket.Response r = StorageDepositCarriedPacket.executeDepositCarried(p,
+                new StorageDepositCarriedPacket("sess", "op", sidOf(key), 0, rev, 1));
+        check(helper, r.success(), "拖入存入大师球应成功，实际 " + r.code() + " " + r.message());
+        ItemStack stored = chestAt(helper, pos).getItem(0);
+        RegistryValue<PokeBall> ball = stored.get(PixelmonDataComponents.POKE_BALL.get());
+        check(helper, ball != null && "master_ball".equals(ball.get().getName()),
+                "拖入后容器里的球应保持 master_ball，实际 " + stored);
         helper.succeed();
     }
 }

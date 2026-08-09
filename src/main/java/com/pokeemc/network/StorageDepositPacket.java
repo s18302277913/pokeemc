@@ -9,6 +9,7 @@ import com.pokeemc.storage.StorageRecord;
 import com.pokeemc.storage.StorageSavedData;
 import com.pokeemc.storage.StorageServices;
 import com.pokeemc.storage.adapter.AbstractContainerAdapter;
+import com.pokeemc.storage.adapter.PokeballIdentity;
 import com.pokeemc.storage.adapter.VanillaEnderChestAdapter;
 import com.pokeemc.storage.adapter.StorageHandleExt;
 import com.poketrade.api.storage.StorageAdapter;
@@ -309,14 +310,17 @@ public record StorageDepositPacket(
         return -1;
     }
 
-    /** 读取玩家主背包指定槽位的注册表物品 ID；空槽返回 null。 */
+    /**
+     * 读取玩家主背包指定槽位的物品 ID；空槽返回 null。
+     * [CHANGED] Bug 1 残留：经 {@link PokeballIdentity#encode} 编码，
+     * 球类保留球种（pixelmon:poke_ball#master_ball），不再降级为普通精灵球。
+     */
     private static String inventoryItemId(ServerPlayer player, int slot) {
         net.minecraft.world.item.ItemStack stack = player.getInventory().getItem(slot);
         if (stack.isEmpty()) {
             return null;
         }
-        ResourceLocation id = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem());
-        return id == null ? null : id.toString();
+        return PokeballIdentity.encode(stack);
     }
 
     private static boolean isBlankOrTooLong(String value) {

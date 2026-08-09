@@ -15,6 +15,7 @@ import com.pokeemc.network.StorageSellPacket;
 import com.pokeemc.network.StorageSnapshotPacket;
 import com.pokeemc.network.StorageWithdrawCarriedPacket;
 import com.pokeemc.storage.StoragePermission;
+import com.pokeemc.storage.adapter.PokeballIdentity;
 import com.poketrade.api.TradeResult;
 import com.poketrade.api.price.PriceSort;
 import com.poketrade.api.storage.StorageDescriptor;
@@ -411,6 +412,16 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
 
     /** 本地化显示名解析器（C2/C6：目录与出售预览共用；解析失败返回空串）。 */
     private String displayNameOf(String itemId) {
+        // [CHANGED] Bug 1：球类 itemId（pixelmon:poke_ball#master_ball）先经身份
+        // 解码还原球种，否则默认实例 hoverName 恒为「精灵球」。
+        try {
+            String ballName = PokeballIdentity.displayName(itemId);
+            if (ballName != null) {
+                return ballName;
+            }
+        } catch (RuntimeException ignored) {
+            // 回退到注册表解析
+        }
         ResourceLocation rl = ResourceLocation.tryParse(itemId);
         if (rl == null) {
             return "";
@@ -1695,22 +1706,23 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             sellMessageColor = PeStyle.TEXT_WARN;
             return;
         }
-        Item item = null;
+        // [CHANGED] Bug 1：球类 itemId 含 '#'，ResourceLocation.parse 会抛异常；
+        // 改经身份解码还原带组件的样本栈（大师球只与大师球合并，不再当精灵球处理）。
+        ItemStack sample = null;
         try {
-            item = BuiltInRegistries.ITEM.get(ResourceLocation.parse(slot.itemId()));
+            sample = PokeballIdentity.decode(slot.itemId(), 1);
         } catch (RuntimeException ignored) {
             // 物品 id 无法解析时按不可取出处理
         }
-        if (item == null || item == net.minecraft.world.item.Items.AIR) {
+        if (sample == null || sample.isEmpty()) {
             sellMessage = t("poketrade.exchange.withdraw.invalid");
             sellMessageColor = PeStyle.TEXT_ERROR;
             return;
         }
         Inventory inv = this.minecraft.player.getInventory();
-        int maxStack = Math.max(1, item.getDefaultMaxStackSize());
+        int maxStack = Math.max(1, sample.getMaxStackSize());
         int target = -1;
         int count = Math.min(slot.count(), maxStack);
-        ItemStack sample = new ItemStack(item);
         for (int i = 0; i < inv.items.size(); i++) {
             ItemStack s = inv.getItem(i);
             if (!s.isEmpty() && ItemStack.isSameItemSameComponents(s, sample)
@@ -2562,6 +2574,25 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     List<Component> lines = new ArrayList<>();
                     lines.add(s.isEmpty() ? Component.literal(slot.itemId()) : s.getHoverName());
                     lines.add(Component.translatable("poketrade.exchange.snapshot.hint"));
+                    // [CHANGED] Bug 2：仓储槽位 tooltip 补价格行（目录有价显示买/卖价，无价提示暂无定价）
+                    long buy = 0, sell = 0;
+                    boolean priced = false;
+                    for (ExchangeCatalogPacket.EntryWire e : catalog) {
+                        if (e.itemId().equals(slot.itemId())) {
+                            buy = e.buyPrice();
+                            sell = e.sellPrice();
+                            priced = true;
+                            break;
+                        }
+                    }
+                    if (priced) {
+                        lines.add(Component.translatable("poketrade.exchange.buy")
+                                .append(Component.literal(": " + ExchangeUiModel.formatAmount(buy))));
+                        lines.add(Component.translatable("poketrade.exchange.sell")
+                                .append(Component.literal(": " + ExchangeUiModel.formatAmount(sell))));
+                    } else {
+                        lines.add(Component.translatable("poketrade.exchange.storage.no.price"));
+                    }
                     // [CHANGED] Bug G：仓储槽位 tooltip 同样带物品图标
                     g.renderTooltip(this.font, lines, java.util.Optional.empty(), s, mouseX, mouseY);
                     return;
@@ -2795,10 +2826,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     private ItemStack toStack(StorageItemSlot slot) {
         ItemStack stack = ItemStack.EMPTY;
         try {
-            var item = BuiltInRegistries.ITEM.get(ResourceLocation.parse(slot.itemId()));
-            if (item != null && item != net.minecraft.world.item.Items.AIR) {
-                stack = new ItemStack(item);
-                stack.setCount(slot.count());
+            // [CHANGED] Bug 1：球类经身份解码还原球种组件（否则显示普通精灵球）。
+            ItemStack s = PokeballIdentity.decode(slot.itemId(), slot.count());
+            if (s != null) {
+                stack = s;
             }
         } catch (RuntimeException ignored) {
             // 物品 id 无法解析时显示空

@@ -1,12 +1,9 @@
 package com.pokeemc.storage.adapter;
 
 import java.util.Objects;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.Container;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
 
 /**
  * 将 Minecraft {@link Container} 桥接为 {@link SlotStore}。
@@ -37,8 +34,9 @@ public final class MinecraftSlotStore implements SlotStore {
 
     @Override
     public String itemId(int slot) {
-        ItemStack stack = container.getItem(slot);
-        return stack.isEmpty() ? null : BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
+        // [CHANGED] Bug 1：球类经 PokeballIdentity 编码（pixelmon:poke_ball#<球种>），
+        // 保留球种组件身份，避免大师球与精灵球在仓储链路中互相混淆。
+        return PokeballIdentity.encode(container.getItem(slot));
     }
 
     @Override
@@ -52,14 +50,11 @@ public final class MinecraftSlotStore implements SlotStore {
         if (!current.isEmpty()) {
             return container.getMaxStackSize(current);
         }
-        ResourceLocation id = ResourceLocation.tryParse(itemId);
-        if (id == null) {
-            return 1;
-        }
-        Item item = BuiltInRegistries.ITEM.get(id);
+        // [CHANGED] Bug 1：经 baseItem 去掉球种后缀解析 base 注册表键。
+        Item item = PokeballIdentity.baseItem(itemId);
         // 注意：不能传 ItemStack.EMPTY 查询 getMaxStackSize —— NeoForge 的 IItemExtension
         // 实现为 stack.getOrDefault(MAX_STACK_SIZE, 1)，EMPTY 无组件恒返回 1。
-        return (item == null || item == Items.AIR) ? 1 : item.getDefaultMaxStackSize();
+        return item == null ? 1 : item.getDefaultMaxStackSize();
     }
 
     @Override
@@ -73,9 +68,13 @@ public final class MinecraftSlotStore implements SlotStore {
             container.setItem(slot, ItemStack.EMPTY);
             return;
         }
-        ResourceLocation id = ResourceLocation.parse(itemId);
-        Item item = BuiltInRegistries.ITEM.get(id);
-        container.setItem(slot, new ItemStack(item, count));
+        // [CHANGED] Bug 1：统一经 PokeballIdentity 解码——球类还原球种组件；
+        // 未知球种/非法编码返回 null 时抛异常（宁失败不静默降级成精灵球）。
+        ItemStack s = PokeballIdentity.decode(itemId, count);
+        if (s == null) {
+            throw new IllegalArgumentException("cannot restore item identity: " + itemId);
+        }
+        container.setItem(slot, s);
     }
 
     @Override

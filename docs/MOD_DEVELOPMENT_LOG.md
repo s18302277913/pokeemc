@@ -271,3 +271,27 @@ _（后续会话按时间倒序追加于此）_
 - [x] 两问题修复完成，验证链全绿：`compileJava` → `:test` 全量（**652 项**，含新增 `previewRowLayoutRightAlignsPriceAndReservesNameGap`/`previewRowLayoutNameNeverOverlapsPriceAtAnyPxWidth` 两个穿模几何测试）→ `runGameTestServer`（**40/40**）→ `build --offline`。
 - [ ] **UI 交互依赖运行时验证**：GameTest 无法覆盖客户端渲染/点击，请游戏中验证——① 三种窗口缩放档位（1.0/0.75/0.5）下主面板/按钮/钱包/页码/购物车统计/左栏行名/「末」徽标/流程消息/出售提示/右键菜单/出售预览弹窗文字全部清晰、无糊边，1.0 档文字与面板对齐无 0.5px 偏移；② 批量出售预览：`Master Ball ×1` 与 `5,000,000` 不重叠、超长名称截断、价格不出弹窗右缘；③ 弹窗打开时主界面文字被正确遮挡，tooltip 无弹窗时清晰、有弹窗时被抑制（早退逻辑不变）；④ 搜索框输入文字与占位提示尺寸一致（同为缩放态）。
 - [ ] **已知边界（文字清晰化的剩余模糊面）**：EditBox 输入文字/光标、物品槽位数量徽标、物品图标、拖拽浮动物品仍随缩放矩阵渲染（ADR-45 取舍）；0.75/0.5 档下这些元素随 UI 缩小，属缩放开方案固有特性，非本次文字目标。若后续需要，可将 EditBox 改为自定义渲染（剥离 vanilla 内部文字）彻底像素对齐。
+
+### [2026-08-09 15:24] 会话 #13 — 仓储五连修复（球类降级 / tooltip 价格 / 末影箱翻译 / 分类 unknown）
+
+### 🎯 本次需求
+玩家反馈仓储的 5 个 bug：
+1. **大师球放进箱子变成精灵球**——怀疑 id 复用导致（球类组件丢失）。
+2. **仓储指针（槽位 tooltip）不显示价格**。
+3. **末影箱指针信息「所有者」列显示超长键名** `poketrade.storage.type.vanilla_ender_chest`——缺翻译键。
+4. **分类点击后显示「分类: unknown」**。
+5. **交易物品列表指针信息显示「[unknown]」分类**——前半段不对，模组名后半段正常。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-46（Bug 1 根因 = Pixelmon 球类共用 `pixelmon:poke_ball` 注册键，球种存于 DataComponent；itemId 链路重建栈丢组件）**：Pixelmon Reforged 9.x 所有精灵球 registry id 都是 `pixelmon:poke_ball`，球种由 `PokeBall` DataComponent（`PixelmonDataComponents.POKE_BALL`）区分。旧 itemId 只取 registry key，`new ItemStack(item, count)` 重建 → 组件丢失 → 大师球降级精灵球。修复：新建 `PokeballIdentity`（`com.pokeemc.storage.adapter`）共享编解码——`encode(stack)` 对 `PokeBallItem` 输出 `pixelmon:poke_ball#master_ball`（`#` 后跟 `PokeBall.getName()`），普通物品保持原注册键；`decode(itemId, count)` 按 `#` 拆分，球类走 `PokeBallRegistry.getPokeBall(ballKey)` + `PokeBallItem.of(value.get(), count)` 还原组件，**未初始化/未知变体抛异常返回 null，绝不静默降级成普通精灵球**；`baseItem(itemId)` 取 `#` 前基础物品（供 maxStackSize）。[CHANGED] `PokeballIdentity.java`（新）、`MinecraftSlotStore.java`（itemId/maxStack/set 全走编解码）。商品出售遇 `#` id 时 `TradeItemId.parse` 抛异常 → `ExchangeService` 返回「无价格不可出售」优雅降级不崩溃（价格表无球种维度，记录为已知限制）。
+- **ADR-47（Bug 1 全链路排查：除 `MinecraftSlotStore` 外，拖入存入两处服务端 itemId 也绕过了编码）**：`StorageDepositCarriedPacket.executeAtSlot`（自动找槽 + 定点拖入）与 `StorageDepositPacket.inventoryItemId` 原用 `BuiltInRegistries.ITEM.getKey(...)` 取字符串——大师球拖入同样丢组件。三处统一改 `PokeballIdentity.encode(carried/stack)`，null 时返回 `invalid_request`。GameTest 新增 `carriedDepositKeepsPokeballVariant`（真实拖入路径，40→41 项）与 `pokeballVariantSurvivesStorageRoundTrip`（容器往返，41→42 项）。[CHANGED] `StorageDepositCarriedPacket.java`/`StorageDepositPacket.java`/`StoragePacketGameTests.java`。
+- **ADR-48（Bug 2 根因 = 仓储槽位 tooltip 无价格行）**：`ExchangeScreen.renderTooltip` 仓储槽位块只渲染名称 + hint，未查目录价格。修复：遍历 `catalog` 的 `EntryWire` 按 itemId 命中买价/卖价，命中追加「买价/卖价」两行（复用 `ExchangeUiModel.formatAmount`），未命中追加「暂无定价」。新增 `poketrade.exchange.storage.no.price` 翻译键（zh「暂无定价」/ en「No price set」）。[CHANGED] `ExchangeScreen.java`/`zh_cn.json`/`en_us.json`。
+- **ADR-49（Bug 3 根因 = 缺翻译键，非编码问题）**：`StorageBrowserScreen` 仓储类型名按 `poketrade.storage.type.<adapterType>` 查键，`vanilla_ender_chest` 从未补键 → 兜底渲染字面键名。补 `zh_cn.json`「末影箱」/`en_us.json`「Ender Chest」。[CHANGED] `zh_cn.json`/`en_us.json`。
+- **ADR-50（Bug 4/5 根因 = 服务端不构建 CreativeModeTab displayItems，分类查找恒 unknown）**：服务端只在客户端打开创造菜单时构建 `displayItems`，`tab.contains()` 查的是 `displayItemsSearchTab`（1.21.1 搜索标签内容，重建后未必填充）。因此服务端 `categoryOf` 对每物恒返回 `"unknown"`，tooltip 模板 `[%s] %s` 渲染成字面 `[unknown]`。修复：① 首次分类查找经 `CreativeModeTabs.tryRebuildTabContents(FeatureFlags.DEFAULT_FLAGS, true, RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY))` 显式重建一次（`ensureTabsBuilt`，volatile 守卫）；② `computeCategory` 遍历 CATEGORY tab 的 `getDisplayItems()` 用 `ItemStack.isSameItemSameComponents` 匹配，取 `TranslatableContents` 的 key（如 `itemGroup.buildingBlocks`），非翻译型标签回退原字符串；③ 按 `Item` 建 `ConcurrentHashMap` 缓存避免每次目录重建重复扫描。分类键由客户端按语言文件本地化（MC 内置 `itemGroup.*` zh 键）。[CHANGED] `ExchangePriceService.java`。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [x] 五连修复完成，验证链全绿：`compileJava` → `:test` 全量（**652 项**）→ `runGameTestServer`（**42/42**，含新增球类往返 + 拖入大师球回归）→ `build --offline`。
+- [ ] **UI 交互依赖运行时验证**：GameTest 无法覆盖客户端渲染/点击，请游戏中验证——① 大师球（及其他球种：高级球/究极球/纪念球等）放入箱子再取出，仍是原球种不降级；拖入存入同样；② 仓储槽位 tooltip 显示买价/卖价或「暂无定价」；③ 末影箱在附近仓储列表显示「末影箱」而非键名；④ 交易所目录/交易列表分类显示真实分类（如「建筑方块」「战斗用品」等本地化文本）而非 unknown。
+- [ ] **分类键本地化依赖语言文件**：`computeCategory` 返回 `itemGroup.*` 等键，客户端需持有对应语言文件才能本地化；若某模组 tab 名无语言条目，客户端回退显示原键（不崩溃）。Pixelmon 等模组的自定义 tab 分类显示效果需运行时确认。
+- [ ] **球类商品价格缺口**：`#` 编码后商品出售优雅降级「无价格不可出售」（价格表按 registry id 无法表达球种）。若需大师球可出售，需引入球种感知价格键（如 `pixelmon:poke_ball#master_ball`）——记录为 future TODO。
+- [ ] **构建提示**：`PokeballIdentity` 有 Pixelmon deprecated API 警告（`PokeBallItem.of` 或 `RegistryValue.get` 之一，编译通过不阻塞）；已验证 `PokeBallItem.of`/`RegistryValue.get` 签名存在于 pixelmon.jar。

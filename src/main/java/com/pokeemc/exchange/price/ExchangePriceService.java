@@ -9,11 +9,14 @@ import com.poketrade.api.price.PriceCatalogEntry;
 import com.poketrade.api.price.PriceQuote;
 import com.poketrade.api.price.PriceSource;
 import it.unimi.dsi.fastutil.objects.Object2LongMap;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.flag.FeatureFlags;
 import net.minecraft.world.item.CreativeModeTab;
+import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
@@ -44,6 +47,11 @@ public final class ExchangePriceService {
     public static final long SELL_MULTIPLIER = 10L;
 
     private static volatile ExchangePriceService serverInstance;
+    /** 服务端 CreativeModeTab 内容是否已尝试重建（displayItems 依赖构建，见 {@link #ensureTabsBuilt}）。 */
+    private static volatile boolean tabsChecked;
+    /** 物品 → 分类键 缓存（分类查找遍历全部 tab displayItems，缓存避免目录重建时重复扫描）。 */
+    private static final java.util.concurrent.ConcurrentHashMap<Item, String> CATEGORY_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private final Map<TradeItemId, OfficialPriceParser.DoublePrice> official;
     private final Map<TradeItemId, PriceOverrides.OverridePrice> overrides;
@@ -291,27 +299,73 @@ public final class ExchangePriceService {
             if (item == null || item == net.minecraft.world.item.Items.AIR) {
                 return "unknown";
             }
-            ItemStack stack = new ItemStack(item);
-            for (CreativeModeTab tab : BuiltInRegistries.CREATIVE_MODE_TAB) {
-                if (tab.getType() != CreativeModeTab.Type.CATEGORY || !tab.contains(stack)) {
-                    continue;
-                }
-                // [CHANGED] Bug F：原版物品分类此前用服务端 getDisplayName().getString() 固化英文名
-                // （如 "Building Blocks"），服务端无语言包必然返回英文，客户端直接显示英文字样。
-                // 改为提取可翻译键（TranslatableContents#getKey，如 "itemGroup.buildingBlocks"），
-                // 由客户端按语言文件本地化（zh_cn → "建筑方块"）；非翻译型标签（模组 literal 名）
-                // 回退取原字符串，客户端 translatable(key) 无语言键时 fallback 显示原样。
-                Component display = tab.getDisplayName();
-                String categoryKey = display.getContents() instanceof TranslatableContents tc
-                        ? tc.getKey() : display.getString();
-                if (categoryKey != null && !categoryKey.isBlank()) {
-                    return categoryKey;
-                }
+            String cached = CATEGORY_CACHE.get(item);
+            if (cached != null) {
+                return cached;
             }
+            String key = computeCategory(item);
+            CATEGORY_CACHE.putIfAbsent(item, key);
+            return key;
         } catch (LinkageError | RuntimeException e) {
             // 注册表未就绪（如纯 JVM 单测环境未执行 Bootstrap.bootStrap）时回退 unknown；
             // 服务端数据包重载路径注册表已就绪，不受影响。
             PokeEMC.LOGGER.debug("PokeEMC: category lookup failed for {}", id, e);
+        }
+        return "unknown";
+    }
+
+    /**
+     * 确保服务端 CreativeModeTab 的 displayItems 已构建。
+     *
+     * <p>[CHANGED] Bug 4/5：服务端通常不构建创造标签内容（客户端打开创造菜单时才构建），
+     * 而分类查找依赖 displayItems —— 若不构建，categoryOf 恒返回 unknown，客户端
+     * 分类循环/目录 tooltip 全显示「unknown」。首次调用时经
+     * {@link CreativeModeTabs#tryRebuildTabContents} 显式重建一次。</p>
+     */
+    private static void ensureTabsBuilt() {
+        if (tabsChecked) {
+            return;
+        }
+        tabsChecked = true;
+        try {
+            CreativeModeTabs.tryRebuildTabContents(
+                    FeatureFlags.DEFAULT_FLAGS, true,
+                    RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY));
+        } catch (Throwable t) {
+            PokeEMC.LOGGER.debug("PokeEMC: creative tab rebuild failed; categories fall back to unknown", t);
+        }
+    }
+
+    /** 遍历全部 CATEGORY tab 的构建后内容，返回物品所属 tab 的可翻译分类键。 */
+    private static String computeCategory(Item item) {
+        ensureTabsBuilt();
+        ItemStack stack = new ItemStack(item);
+        for (CreativeModeTab tab : BuiltInRegistries.CREATIVE_MODE_TAB) {
+            if (tab.getType() != CreativeModeTab.Type.CATEGORY) {
+                continue;
+            }
+            // [CHANGED] Bug 4/5：不再用 tab.contains —— 1.21.1 的 contains 查的是
+            // displayItemsSearchTab（搜索标签内容），服务端重建后未必填充；
+            // 改为遍历 getDisplayItems()（构建后的全量内容）做 isSameItem 匹配。
+            boolean found = false;
+            for (ItemStack display : tab.getDisplayItems()) {
+                if (ItemStack.isSameItemSameComponents(display, stack)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                continue;
+            }
+            // 提取可翻译键（TranslatableContents#getKey，如 "itemGroup.buildingBlocks"），
+            // 由客户端按语言文件本地化（zh_cn → "建筑方块"）；非翻译型标签（模组 literal 名）
+            // 回退取原字符串，客户端 translatable(key) 无语言键时 fallback 显示原样。
+            Component display = tab.getDisplayName();
+            String categoryKey = display.getContents() instanceof TranslatableContents tc
+                    ? tc.getKey() : display.getString();
+            if (categoryKey != null && !categoryKey.isBlank()) {
+                return categoryKey;
+            }
         }
         return "unknown";
     }

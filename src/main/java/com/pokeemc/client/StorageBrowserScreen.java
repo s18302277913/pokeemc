@@ -10,6 +10,7 @@ import com.pokeemc.network.StorageManagePacket;
 import com.pokeemc.network.StorageMovePacket;
 import com.pokeemc.network.StorageSellPacket;
 import com.pokeemc.network.StorageSnapshotPacket;
+import com.pokeemc.storage.adapter.PokeballIdentity;
 import com.pokeemc.storage.StorageGrant;
 import com.pokeemc.storage.StoragePermission;
 import com.pokeemc.storage.StoragePermissionSet;
@@ -554,10 +555,10 @@ public class StorageBrowserScreen
     private ItemStack toStack(StorageItemSlot slot) {
         ItemStack stack = ItemStack.EMPTY;
         try {
-            var item = BuiltInRegistries.ITEM.get(ResourceLocation.parse(slot.itemId()));
-            if (item != null && item != net.minecraft.world.item.Items.AIR) {
-                stack = new ItemStack(item);
-                stack.setCount(slot.count());
+            // [CHANGED] Bug 1：球类经身份解码还原球种组件（否则显示普通精灵球）。
+            ItemStack s = PokeballIdentity.decode(slot.itemId(), slot.count());
+            if (s != null) {
+                stack = s;
             }
         } catch (RuntimeException ignored) {
             // 物品 id 无法解析时显示空
@@ -749,23 +750,25 @@ public class StorageBrowserScreen
             manageMessageColor = PeStyle.TEXT_WARN;
             return;
         }
-        Item item = null;
+        // [CHANGED] Bug 1：球类 itemId 含 '#'，ResourceLocation.parse 会抛异常；
+        // 改经身份解码还原带组件的样本栈（大师球只与大师球合并）。
+        ItemStack sample = null;
         try {
-            item = BuiltInRegistries.ITEM.get(ResourceLocation.parse(slot.itemId()));
+            sample = PokeballIdentity.decode(slot.itemId(), 1);
         } catch (RuntimeException ignored) {
             // 物品 id 无法解析时按不可取出处理
         }
-        if (item == null || item == net.minecraft.world.item.Items.AIR) {
+        if (sample == null || sample.isEmpty()) {
             manageMessage = t("poketrade.exchange.withdraw.invalid");
             manageMessageColor = PeStyle.TEXT_ERROR;
             return;
         }
-        int maxStack = Math.max(1, item.getDefaultMaxStackSize());
+        int maxStack = Math.max(1, sample.getMaxStackSize());
         ItemStack existing = this.minecraft.player.getInventory().getItem(inventorySlot);
         int count;
         if (existing.isEmpty()) {
             count = Math.min(slot.count(), maxStack);
-        } else if (ItemStack.isSameItemSameComponents(existing, new ItemStack(item))) {
+        } else if (ItemStack.isSameItemSameComponents(existing, sample)) {
             count = Math.min(slot.count(), maxStack - existing.getCount());
         } else {
             manageMessage = t("poketrade.exchange.withdraw.invalid");
