@@ -5,6 +5,7 @@ import com.pixelmonmod.pixelmon.api.pokemon.item.pokeball.PokeBallRegistry;
 import com.pixelmonmod.pixelmon.items.PokeBallItem;
 import com.pixelmonmod.pixelmon.items.PokeBallPart;
 import com.pokeemc.PokeEMC;
+import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
@@ -80,7 +81,8 @@ public final class PKMManager {
     }
 
     public static long getPkm(Item item) {
-        ResourceLocation key = item.builtInRegistryHolder().key().location();
+        // [CHANGED] 官方 API：builtInRegistryHolder() 已弃用，改用 BuiltInRegistries.ITEM.getKey
+        ResourceLocation key = BuiltInRegistries.ITEM.getKey(item);
         return getPkm(key);
     }
 
@@ -108,7 +110,7 @@ public final class PKMManager {
                 continue;
             }
             Item item = BuiltInRegistries.ITEM.get(key);
-            if (item != null && !item.builtInRegistryHolder().key().location().equals(ResourceLocation.withDefaultNamespace("air"))) {
+            if (item != null && !BuiltInRegistries.ITEM.getKey(item).equals(ResourceLocation.withDefaultNamespace("air"))) {
                 result.add(new PricedStack(new ItemStack(item), PKM_VALUES.getLong(key)));
             }
         }
@@ -123,9 +125,11 @@ public final class PKMManager {
         PKM_VALUES.clear();
         PKM_VALUES.putAll(MANUAL_VALUES);
         BALL_VALUES.clear();
-        for (Map.Entry<ResourceLocation, Long> entry : MANUAL_VALUES.entrySet()) {
+        // [CHANGED] 官方 API：Object2LongMap 的 entrySet()/put(K,Long) 装箱变体已弃用，
+        // 改用 object2LongEntrySet() + getLongValue() 原语访问避免自动装箱
+        for (Object2LongMap.Entry<ResourceLocation> entry : MANUAL_VALUES.object2LongEntrySet()) {
             if (isPokeBallVariant(entry.getKey())) {
-                BALL_VALUES.put(entry.getKey().getPath(), entry.getValue());
+                BALL_VALUES.put(entry.getKey().getPath(), entry.getLongValue());
             }
         }
     }

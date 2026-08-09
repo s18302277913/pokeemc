@@ -2,6 +2,7 @@ package com.pokeemc.emc;
 
 import com.pokeemc.PokeEMC;
 import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.Ingredient;
@@ -71,7 +72,7 @@ public final class PkmRecipeCalculator {
         if (output.isEmpty()) {
             return false;
         }
-        ResourceLocation outKey = output.getItem().builtInRegistryHolder().key().location();
+        ResourceLocation outKey = BuiltInRegistries.ITEM.getKey(output.getItem()); // [CHANGED] 官方 API：builtInRegistryHolder() 弃用
         long outVal = PKMManager.getPkm(outKey);
 
         // 熔炼/烧烤类：1 输入 → 1 输出，双向传播
@@ -143,7 +144,7 @@ public final class PkmRecipeCalculator {
             } else if (outVal >= 0) {
                 // 输出有价 → 输入同价（如矿石：铁锭 256 → 铁矿石 256）
                 for (ItemStack stack : ingredient.getItems()) {
-                    ResourceLocation inKey = stack.getItem().builtInRegistryHolder().key().location();
+                    ResourceLocation inKey = BuiltInRegistries.ITEM.getKey(stack.getItem()); // [CHANGED] 官方 API
                     if (PKMManager.getPkm(inKey) < 0) {
                         PKMManager.setComputed(inKey, outVal);
                         changed = true;

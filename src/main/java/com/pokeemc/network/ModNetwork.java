@@ -23,7 +23,7 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 
-@EventBusSubscriber(modid = PokeEMC.MODID, bus = EventBusSubscriber.Bus.MOD)
+@EventBusSubscriber(modid = PokeEMC.MODID) // [CHANGED] 官方 API：NeoForge 依 IModBusEvent 自动路由 mod bus，bus 属性已 [removal]
 public class ModNetwork {
 
     /** 协议版本：增加不兼容 C2S/S2C 包或语义变更时递增（Task 8 从笼统 "2" 整理为常量） */

@@ -6,6 +6,7 @@ import com.pokeemc.network.SetCondenserTargetPacket;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
@@ -98,7 +99,7 @@ public class CondenserScreen extends AbstractContainerScreen<CondenserMenu> {
             if (!query.isEmpty()) {
                 String name = stack.getItem().getDescriptionId().toLowerCase();
                 String display = stack.getHoverName().getString().toLowerCase();
-                String id = stack.getItem().builtInRegistryHolder().key().location().toString().toLowerCase();
+                String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString().toLowerCase(); // [CHANGED] 官方 API
                 if (!name.contains(query) && !display.contains(query) && !id.contains(query)) {
                     continue;
                 }

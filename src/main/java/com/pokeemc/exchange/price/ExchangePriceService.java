@@ -8,6 +8,7 @@ import com.poketrade.api.price.PriceCatalog;
 import com.poketrade.api.price.PriceCatalogEntry;
 import com.poketrade.api.price.PriceQuote;
 import com.poketrade.api.price.PriceSource;
+import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.CreativeModeTab;
@@ -246,9 +247,10 @@ public final class ExchangePriceService {
     /** PKM（EMC 价值体系）快照 → TradeItemId 兜底价（仅保留正向价值，非 TradeItemId 路径跳过）。 */
     static Map<TradeItemId, Long> pkmFallback() {
         Map<TradeItemId, Long> out = new LinkedHashMap<>();
-        for (Map.Entry<ResourceLocation, Long> e : PKMManager.snapshot().entrySet()) {
-            Long v = e.getValue();
-            if (v == null || v <= 0) {
+        // [CHANGED] 官方 API：Object2LongMap 装箱 entrySet 已弃用，用原语遍历避免自动装箱
+        for (Object2LongMap.Entry<ResourceLocation> e : PKMManager.snapshot().object2LongEntrySet()) {
+            long v = e.getLongValue();
+            if (v <= 0) {
                 continue;
             }
             try {

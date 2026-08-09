@@ -4,6 +4,7 @@ import com.poketrade.api.price.PriceSort;
 import io.netty.buffer.Unpooled;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.neoforged.neoforge.network.connection.ConnectionType;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -61,7 +62,8 @@ class ExchangeCatalogPacketTest {
     }
 
     private static <T> T roundTrip(T payload) {
-        RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY);
+        // [CHANGED] 官方 API：旧构造已弃用（Neo 建议带 ConnectionType 上下文的构造）
+        RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY, ConnectionType.OTHER);
         if (payload instanceof ExchangeCatalogPacket.Response p) {
             ExchangeCatalogPacket.Response.STREAM_CODEC.encode(buf, p);
             return cast(ExchangeCatalogPacket.Response.STREAM_CODEC.decode(buf));

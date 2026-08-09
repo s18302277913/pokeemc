@@ -56,6 +56,24 @@
 
 ## 会话记录存档区
 
+### [2026-08-09 10:29] 会话 #3 — 官方 API 合规审计（Batch 4）：弃用/待删 API 清零（commit `c8bd04b`）
+
+### 🎯 本次需求
+延续"严格按照官方api标准重做pokeemc"：Batch 1~3 已完成并提交（`f19d43d`、`5a6f7b9`）。
+本轮执行 **Batch 4 全模块官方 API 合规审计**——以 `-Xlint:deprecation -Xlint:removal` 全量编译暴露所有弃用/待删 API，逐一按官方替代修复至零警告。完整 `:test` 套件回归 **BUILD SUCCESSFUL**。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-14（审计方法）**：临时 init 脚本注入 `-Xlint:deprecation -Xlint:removal`（不改 build.gradle），对 `compileJava + compileTestJava` 全量暴露。修复后复编译验证 0 警告。
+- **ADR-15（@EventBusSubscriber bus 弃用）**：NeoForge 21.1.248 中 `bus()`/`Bus` 标记 `[removal]`。官方文档（`documentation/docs/concepts/events.md` 169/175 行）确认推荐 `@EventBusSubscriber(modid=...)` 不带 `bus`——NeoForge 依 `IModBusEvent` 超接口自动路由到 mod bus。已移除 2 处 `bus = EventBusSubscriber.Bus.MOD`（`ModNetwork.java`、`PokeEMCClient.java`）。
+- **ADR-16（Item.builtInRegistryHolder() 弃用）**：6 处改为 `BuiltInRegistries.ITEM.getKey(item)`（返回 `ResourceLocation`，非弃用、语义等价）。涉及 `PKMManager`×2、`PkmRecipeCalculator`×2、`CondenserScreen`、`TransmutationTableScreen`。
+- **ADR-17（FastUtil Object2LongMap 装箱弃用）**：`entrySet()`/`put(K,Long)` 装箱变体弃用，改 `object2LongEntrySet()` + `getLongValue()` 原语访问（`PKMManager.clearComputed`、`ExchangePriceService.pkmFallback`），消除自动装箱。
+- **ADR-18（RegistryFriendlyByteBuf 构造弃用）**：`(ByteBuf, RegistryAccess)` 弃用，Neo 补丁 javadoc 指明 "use overload with ConnectionType context"。测试改用 `(ByteBuf, RegistryAccess, ConnectionType.OTHER)`。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [ ] Batch 4 提交 + GameTest（`runGameTestServer`）+ `gradlew build --offline` 终验与日志归档（Task #4）。
+- [ ] 58 个测试类 + GameTest 迁移核对：`:test` 已全绿，`runGameTestServer` 待跑。
+- [ ] 后续可立项：Datagen 引入（本轮明确排除，保留手写 JSON）。
+
 ### [2026-08-09] 会话 #2 — 官方 API 标准重做：摸底完成，方案提交
 
 ### 🎯 本次需求

@@ -15,7 +15,7 @@ import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
 import net.neoforged.neoforge.client.event.RegisterMenuScreensEvent;
 import net.neoforged.neoforge.common.NeoForge;
 
-@EventBusSubscriber(modid = PokeEMC.MODID, value = Dist.CLIENT, bus = EventBusSubscriber.Bus.MOD)
+@EventBusSubscriber(modid = PokeEMC.MODID, value = Dist.CLIENT) // [CHANGED] 官方 API：bus 属性已 [removal]，NeoForge 自动路由
 public class PokeEMCClient {
 
     @SubscribeEvent
