@@ -184,3 +184,18 @@ _（后续会话按时间倒序追加于此）_
 - [ ] **Bug E 回归说明**：`onInputChanged` 换算依赖 Pixelmon `BankAccountProxy`，GameTest/纯 JVM 环境无 Pixelmon registry 且类加载不可达，未新增自动化单测；逻辑经 javap 反编译 `moveItemStackTo`/`Slot.setByPlayer`/`AbstractContainerScreen.mouseClicked` 三层实证 + 编译通过。待接入支持幂等钱包或 Pixelmon 可用测试环境后补测。
 - [ ] **Bug F 边界**：目录分类现为翻译键（`itemGroup.*`），客户端 `Component.translatable` 对无语言包的模组 tab 会 fallback 显示 key 本身（可读性劣于原英文名）；服务端目录重建（数据包 reload）后需重开交易所 UI 生效（同 ADR-25 已知边界）。
 - [ ] **Bug G 边界**：catalog/仓储/购物车 tooltip 已带图标；交易所「出售预览弹窗」行仍为 `drawString` 文本列表（非 tooltip），未纳入本次样式统一。
+
+### [2026-08-09 13:16] 会话 #8 — 批量出售弹窗预览穿模（z 层级被物品深度剔除）
+
+### 🎯 本次需求
+1. 玩家反馈：批量出售弹窗预览的图层优先级太低，比交易物品列表、钱包、页数要低，直接导致穿模。
+2. 顺带查询：仓储转移存在（疑似）自动吸附效果，核实是否正常。
+
+### 📐 架构决策记录 (ADR)
+- **ADR-31（批量出售弹窗穿模根因 = GUI 深度方向 + RenderType.gui 自带 LEQUAL 深度测试）**：反编译实证 1.21.1 GUI 主投影 `setOrtho(0, width, height, 0, 1000, 21000)` + modelview `translate(0,0,-11000)`，深度随世界 z 单调递增；`GuiGraphics.renderItem` 内部 `pose.translate(..., 150 + ...)` 把物品图标画在 **z=150（深度≈0.49）**，而 modal 背景用 `g.fill`（`RenderType.gui()`，默认 z=0 → 深度≈0.5）**比物品更远**。关键点：`RenderType.gui()` 的 CompositeState 自带 `.setDepthTestState(LEQUAL_DEPTH_TEST)` 且默认 COLOR_DEPTH_WRITE——endBatch 绘制时会用其 RenderStateShard **覆盖**外层 `RenderSystem.disableDepthTest()`，故此前 modal 块的 flush+disableDepthTest 处理无效：弹窗背景在 z=0 被物品深度（LEQUAL 0.5 ≤ 0.49 失败）**剔除不绘制**，只剩无深度测试的 text buffer（文字）悬浮在下层物品/钱包/页数之上，即"穿模"。（顺带更正：此前注释假设"renderItem 用独立 buffer"不成立——GUI 的 fill/text/物品图标全走同一个 sharedBuffer，endBatch 顺序与深度共同决定层级。）修复：modal 与右键菜单两块绘制前 `g.pose().translate(0,0,400)` 把弹窗整体提升到 **z=400（深度≈0.48，近于一切下层元素）**，LEQUAL 深度测试通过、背景得以绘制并盖住列表/钱包/页数；text 为 NO_DEPTH_TEST 不受影响。GUI 主循环每帧 `RenderSystem.clear(256)`（DEPTH_BUFFER_BIT）清深度，无跨帧残留副作用。[CHANGED] `ExchangeScreen.java`。
+- **ADR-32（仓储转移"自动吸附"= 设计行为，非缺陷）**：查询确认 `StorageDepositPacket.findDepositSlot` 的自动找槽逻辑（优先同 ID 可堆叠槽 → 空槽）即"自动吸附"来源，属既定设计；已知边界：`MinecraftSlotStore.set()` 用 `new ItemStack(item, count)` 重建会丢弃 NBT 组件（有 NBT 的物品在自动找槽路径下组件丢失），维持既有语义不改代码，列入 TODO 评估。
+
+### ⚠️ 遗留风险与待办 (TODOs)
+- [x] 穿模修复完成，验证链全绿：`compileJava` → `:test` 全量 → `runGameTestServer`（**40/40**）→ `build --offline`。
+- [ ] **UI 层修复依赖运行时验证**：本修复基于反编译实证（投影矩阵/深度映射/RenderType state），GameTest 无法覆盖客户端渲染；请在游戏中打开交易所→批量出售弹窗，确认弹窗背景不透明盖住中间列表/钱包/页数、无穿模，且右键菜单同样正常。
+- [ ] 自动找槽 NBT 丢弃边界：如后续支持 NBT 物品自动入仓，需在 `findDepositSlot`/`simulateInsert` 增加组件比较（可维护项）。

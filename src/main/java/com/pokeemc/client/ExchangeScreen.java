@@ -1799,24 +1799,29 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (this.radiusBox != null) {
             this.radiusBox.render(g, lmx, lmy, partialTick);
         }
-        // 预览弹窗绘制在最顶层：先 flush 掉物品渲染批次（renderItem 用独立 buffer 且带深度写入），
-        // 再关闭深度测试绘制弹窗——绘制顺序在深度禁用下决定层级，确保彻底盖住中间物品列表与背包物品
+        // 预览弹窗绘制在最顶层。真实根因（穿模）：GUI 主投影为
+        // setOrtho(0.., 1000, 21000) + modelview translate(0,0,-11000)，深度随 z 单调递增——
+        // 物品图标在 GuiGraphics.renderItem 内部 translate 到 z=150（深度≈0.49），比默认 z=0
+        // （深度≈0.5）更近；而 RenderType.gui() 自带 LEQUAL 深度测试，绘制时其 RenderStateShard
+        // 会覆盖这里的 disableDepthTest，导致弹窗背景在 z=0 被物品深度剔除、只有无深度测试的
+        // 文字悬浮在下层内容上（表现为“图层优先级低、弹窗被交易列表/钱包/页数穿透”）。
+        // 修复：把弹窗整体提升到 z=400（深度≈0.48，近于一切下层元素），LEQUAL 通过即盖住。
         if (sellPreview != null) {
             g.flush();
             com.mojang.blaze3d.systems.RenderSystem.disableDepthTest();
             g.pose().pushPose();
+            g.pose().translate(0.0F, 0.0F, 400.0F); // [CHANGED] 近于物品 z=150，修复弹窗被穿透
             renderSellPreviewModal(g);
             renderSellPreviewLabels(g, lmx, lmy);
             g.pose().popPose();
-            // 弹窗 quad 已在禁用深度下排队，必须在重新开启深度测试前提交，
-            // 否则 quad 会在深度测试恢复后才绘制，导致依旧穿透下层物品（穿模）
             g.flush();
             com.mojang.blaze3d.systems.RenderSystem.enableDepthTest();
         }
-        // 右键菜单在最顶层
+        // 右键菜单在最顶层（同穿模根因：z 提升到 400，近于物品 z=150，背景不被深度剔除）
         g.flush();
         com.mojang.blaze3d.systems.RenderSystem.disableDepthTest();
         g.pose().pushPose();
+        g.pose().translate(0.0F, 0.0F, 400.0F); // [CHANGED] 修复右键菜单被物品穿透
         renderContextMenu(g, lmx, lmy);
         g.pose().popPose();
         g.flush();
