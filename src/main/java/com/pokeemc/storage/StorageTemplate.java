@@ -81,6 +81,16 @@ public record StorageTemplate(
                 createdAtEpochMillis, updatedAtEpochMillis, revision);
     }
 
+    /**
+     * 重命名模板（仅改显示名，id 与 FOLLOW 绑定不受影响；
+     * revision 由 {@link StorageSavedData} 统一递增）。
+     */
+    public StorageTemplate renamed(String newName) {
+        return new StorageTemplate(
+                id, scope, ownerId, newName, grants,
+                createdAtEpochMillis, updatedAtEpochMillis, revision);
+    }
+
     /** 标记一次变更：更新 {@code updatedAt} 并递增 revision。 */
     public StorageTemplate touch(long nowEpochMillis) {
         return new StorageTemplate(

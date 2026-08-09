@@ -21,10 +21,6 @@ import net.minecraft.commands.arguments.DimensionArgument;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.StringTag;
-import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
@@ -46,7 +42,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -65,11 +60,11 @@ import java.util.regex.Pattern;
  * 玩家名可完整显示。禁止在审计 detail 中写入物品 NBT / 聊天内容 / IP / 令牌
  * （{@link StorageAuditEntry} 只做 256 字符机械截断）。</p>
  *
- * <p><b>SavedData 热替换</b>：StorageSavedData 目前没有删除记录（unclaim）、
- * 重建区块索引（repair）和模板改名（rename）的公开 API。本类通过
- * {@code encode → NBT 修改 → decode → DimensionDataStorage.set} 在服务端线程
- * 内替换存档实例实现这三类变更（所有服务都通过 computeIfAbsent 每次现取，
- * 替换后立即可见；仅用于现有 API 无法表达的变更）。</p>
+ * <p>[REMOVED] <b>SavedData 热替换</b>（缺陷 #7）：旧实现通过
+ * {@code encode → NBT 修改 → decode → DimensionDataStorage.set} 替换存档实例实现
+ * unclaim / repair / rename，会替换实例并使其他服务持有的引用失效。重做后改调
+ * {@link StorageSavedData#deleteStorage} / {@link StorageSavedData#rebuildChunkIndex} /
+ * {@link StorageSavedData#renameTemplate} 等直接公开 API，绕路机制已删除。</p>
  */
 public final class StorageCommands {
 
@@ -79,17 +74,8 @@ public final class StorageCommands {
     public static final int SCAN_DEFAULT_RADIUS = 32;
     public static final int SCAN_MAX_RADIUS = 256;
 
-    // StorageSavedData 序列化键名（与 encode/decode 保持一致）
-    private static final String KEY_STORAGES = "storages";
-    private static final String KEY_STORAGE_KEY = "key";
-    private static final String KEY_TEMPLATES = "templates";
-    private static final String KEY_TEMPLATE_ID = "id";
-    private static final String KEY_TEMPLATE_NAME = "name";
-    private static final String KEY_CHUNK_INDEX = "chunkIndex";
-    private static final String KEY_DIM = "dim";
-    private static final String KEY_X = "x";
-    private static final String KEY_Z = "z";
-    private static final String KEY_KEYS = "keys";
+    // [REMOVED] StorageSavedData 序列化键名（KEY_STORAGES 等）：缺陷 #7 移除
+    // encode→decode 热替换后已无使用者，序列化格式由 StorageSavedData 独占维护。
 
     // 参数名
     private static final String ARG_POS = "pos";
@@ -282,9 +268,8 @@ public final class StorageCommands {
         /**
          * 现取的 StorageSavedData 实例。
          *
-         * <p>unclaim / repair / rename 等操作通过 {@link #replaceSavedData} 热替换
-         * 存档实例，因此这里不能缓存构造时的引用——每次调用都从服务端
-         * DimensionDataStorage 重新获取，替换后立即可见。</p>
+         * <p>[CHANGED] 缺陷 #7 修复后不再有热替换，unclaim/rename/repair 均通过直接
+         * API 原地变更同一实例；此处仍每次现取，保证与存档最新状态一致。</p>
          */
         public StorageSavedData data() {
             return savedData(server);
@@ -574,17 +559,16 @@ public final class StorageCommands {
     /**
      * unclaim：取消认领（仅所有者或管理员）。
      *
-     * <p>StorageSavedData 没有删除记录的公开 API，这里通过 SavedData 热替换
-     * （encode → 移除条目 → decode → set）实现；chunkIndex 中指向该仓储的
-     * 键会在 decode 时自动丢弃。</p>
+     * <p>[CHANGED] 缺陷 #7 修复：改为直接调用 {@link StorageSavedData#deleteStorage}，
+     * 不再经 encode→decode 热替换绕路（旧实现会替换 SavedData 实例并使其他服务
+     * 持有的引用失效）。deleteStorage 同时从区块索引移除并置脏。</p>
      */
     public static String executeUnclaim(CmdCtx ctx, StorageKey key) throws CmdError {
         StorageRecord record = requireOwnerOrAdmin(ctx, key);
-        StorageSavedData rebuilt = replaceSavedData(ctx.server(), tag -> {
-            ListTag storages = tag.getList(KEY_STORAGES, Tag.TAG_COMPOUND);
-            storages.removeIf(t -> key.asString().equals(((CompoundTag) t).getString(KEY_STORAGE_KEY)));
-        });
-        rebuilt.appendAudit(System.currentTimeMillis(), key.asString(), ctx.actorId(),
+        if (!ctx.data().deleteStorage(key)) {
+            throw new CmdError("仓储不存在或已被取消认领");
+        }
+        ctx.data().appendAudit(System.currentTimeMillis(), key.asString(), ctx.actorId(),
                 "unclaim", "owner " + record.ownerName() + " (" + maskUuid(record.ownerId()) + ")");
         return "已取消认领 " + key.location() + "（原所有者 " + record.ownerName() + "）";
     }
@@ -666,22 +650,16 @@ public final class StorageCommands {
 
     /**
      * 模板重命名（仅改显示名，id 不变，FOLLOW 绑定不受影响）。
-     * StorageSavedData 没有改名 API，通过 SavedData 热替换修改 NBT 的 name 字段。
+     * [CHANGED] 缺陷 #7 修复：改为直接调用 {@link StorageSavedData#renameTemplate}，
+     * 不再经 encode→decode 热替换绕路。
      */
     public static String executeTemplateRename(CmdCtx ctx, String id, String newName)
             throws CmdError {
         StorageTemplate template = requireTemplate(ctx, id, true);
         validateTemplateName(newName);
-        replaceSavedData(ctx.server(), tag -> {
-            ListTag templates = tag.getList(KEY_TEMPLATES, Tag.TAG_COMPOUND);
-            for (int i = 0; i < templates.size(); i++) {
-                CompoundTag entry = templates.getCompound(i);
-                if (id.equals(entry.getString(KEY_TEMPLATE_ID))) {
-                    entry.putString(KEY_TEMPLATE_NAME, newName);
-                    return;
-                }
-            }
-        });
+        if (!ctx.data().renameTemplate(id, template.revision(), newName)) {
+            throw new CmdError("模板已变更，请重试");
+        }
         audit(ctx, null, "template_rename", id + " " + template.name() + " -> " + newName);
         return "模板已重命名: " + template.name() + " -> " + newName;
     }
@@ -873,9 +851,9 @@ public final class StorageCommands {
      * repair：只修复索引与失效模板引用（仅管理员）。
      * <ul>
      *   <li>失效模板引用：调用 {@link StorageSavedData#repairTemplateReferences()}；</li>
-     *   <li>区块索引：校验每个记录键是否出现在其分块的索引桶中，缺失时通过
-     *       SavedData 热替换按记录重建 chunkIndex（decode 会自动丢弃指向不存在
-     *       仓储的键）；</li>
+     *   <li>区块索引：校验每个记录键是否出现在其分块的索引桶中，缺失时调用
+     *       {@link StorageSavedData#rebuildChunkIndex()} 按记录重建（[CHANGED] 缺陷 #7
+     *       修复：不再经 SavedData 热替换绕路）；</li>
      *   <li>不猜测所有者、不删除仍可能卸载的仓储记录。</li>
      * </ul>
      */
@@ -903,7 +881,7 @@ public final class StorageCommands {
         }
         int rebuilt = 0;
         if (missingIndex > 0) {
-            replaceSavedData(ctx.server(), StorageCommands::rebuildChunkIndexTag);
+            data.rebuildChunkIndex();
             rebuilt = missingIndex;
         }
         audit(ctx, null, "repair", "templates " + repairedRefs
@@ -1013,62 +991,15 @@ public final class StorageCommands {
                 key != null ? key.asString() : "-", ctx.actorId(), action, detail);
     }
 
-    // ---------------------------------------------------------------- SavedData 热替换
+    // ---------------------------------------------------------------- 存档数据访问
 
     private static StorageSavedData savedData(MinecraftServer server) {
         return server.overworld().getDataStorage()
                 .computeIfAbsent(StorageSavedData.factory(), StorageSavedData.DATA_NAME);
     }
 
-    /**
-     * 热替换 SavedData 实例：encode 当前状态 → 修改 NBT → decode（容错、自动
-     * 清理无效索引/模板引用）→ 写入 DimensionDataStorage。
-     * 所有服务都通过 computeIfAbsent 每次现取，替换后立即可见；失败时（decode
-     * 抛异常）不写回，原实例保持不动。
-     */
-    private static StorageSavedData replaceSavedData(MinecraftServer server,
-                                                     Consumer<CompoundTag> mutator) {
-        StorageSavedData current = savedData(server);
-        CompoundTag tag = StorageSavedData.encode(current);
-        mutator.accept(tag);
-        StorageSavedData rebuilt = StorageSavedData.decode(tag,
-                StorageSavedData.StorageLoadContext.ACCEPT_ALL);
-        rebuilt.setDirty();
-        server.overworld().getDataStorage()
-                .set(StorageSavedData.DATA_NAME, rebuilt);
-        return rebuilt;
-    }
-
-    /** 按 storages 记录重建 chunkIndex（repair 用）。 */
-    private static void rebuildChunkIndexTag(CompoundTag root) {
-        Map<StorageSavedData.ChunkKey, ListTag> buckets = new LinkedHashMap<>();
-        ListTag storages = root.getList(KEY_STORAGES, Tag.TAG_COMPOUND);
-        for (int i = 0; i < storages.size(); i++) {
-            CompoundTag entry = storages.getCompound(i);
-            StorageKey key = StorageKey.parse(entry.getString(KEY_STORAGE_KEY)).orElse(null);
-            if (key == null) {
-                continue;
-            }
-            BlockPos pos = AbstractContainerAdapter.parsePos(key.location());
-            if (pos == null) {
-                continue;
-            }
-            StorageSavedData.ChunkKey chunk = new StorageSavedData.ChunkKey(
-                    key.dimension(), pos.getX() >> 4, pos.getZ() >> 4);
-            ListTag keys = buckets.computeIfAbsent(chunk, ignored -> new ListTag());
-            keys.add(StringTag.valueOf(key.asString()));
-        }
-        ListTag index = new ListTag();
-        for (Map.Entry<StorageSavedData.ChunkKey, ListTag> e : buckets.entrySet()) {
-            CompoundTag entry = new CompoundTag();
-            entry.putString(KEY_DIM, e.getKey().dimension());
-            entry.putInt(KEY_X, e.getKey().chunkX());
-            entry.putInt(KEY_Z, e.getKey().chunkZ());
-            entry.put(KEY_KEYS, e.getValue());
-            index.add(entry);
-        }
-        root.put(KEY_CHUNK_INDEX, index);
-    }
+    // [REMOVED] replaceSavedData / rebuildChunkIndexTag：缺陷 #7 移除 encode→decode
+    // 热替换绕路后已无使用者，unclaim/rename/repair 均改调 StorageSavedData 直接 API。
 
     // ---------------------------------------------------------------- 解析工具
 

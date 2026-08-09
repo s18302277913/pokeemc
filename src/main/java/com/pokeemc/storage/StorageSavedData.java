@@ -1,6 +1,8 @@
 package com.pokeemc.storage;
 
 import com.mojang.logging.LogUtils;
+import com.pokeemc.storage.adapter.AbstractContainerAdapter;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
@@ -341,6 +343,21 @@ public class StorageSavedData extends SavedData {
     }
 
     /**
+     * 重命名模板（仅改显示名，id 与 FOLLOW 绑定不受影响）。
+     * 模板不存在或 revision 不匹配返回 {@code false}，不做任何修改。
+     * 缺陷 #7 修复：替代 encode→decode 热替换改 NBT 的绕路方式。
+     */
+    public boolean renameTemplate(String id, long expectedRevision, String newName) {
+        StorageTemplate current = templates.get(id);
+        if (current == null || current.revision() != expectedRevision) {
+            return false;
+        }
+        templates.put(id, current.renamed(newName).touch(System.currentTimeMillis()));
+        setDirty();
+        return true;
+    }
+
+    /**
      * 原子删除模板：先以删除前的模板权限冻结所有 FOLLOW 绑定仓储（合并为
      * COPY、清除引用、递增 revision），再移除模板。返回被冻结的仓储数。
      */
@@ -431,6 +448,28 @@ public class StorageSavedData extends SavedData {
                         new ChunkKey(key.dimension(), chunkX, chunkZ),
                         ignored -> new LinkedHashSet<>())
                 .add(key);
+    }
+
+    /**
+     * 按当前全部仓储记录重建区块索引。
+     *
+     * <p>从 storages 记录出发重新计算每个键的区块坐标，彻底清除指向已删除仓储
+     * 的悬空键；位置格式非法（虚拟个人仓储如末影箱）不入索引。返回索引条目数。
+     * 缺陷 #7 修复：替代 encode→decode 热替换重建索引的绕路方式。</p>
+     */
+    public int rebuildChunkIndex() {
+        chunkIndex.clear();
+        int indexed = 0;
+        for (StorageKey key : storages.keySet()) {
+            BlockPos pos = AbstractContainerAdapter.parsePos(key.location());
+            if (pos == null) {
+                continue; // 虚拟个人仓储（末影箱）：不占用世界方块，无需区块索引
+            }
+            index(key, pos.getX() >> 4, pos.getZ() >> 4);
+            indexed++;
+        }
+        setDirty();
+        return indexed;
     }
 
     /**
