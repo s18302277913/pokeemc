@@ -193,10 +193,12 @@ PokeEMC
 
 ---
 
-## 四、待补链接（GitHub 发布完成后回填）
+## 四、链接汇总（GitHub 已发布）
 
 - GitHub 仓库：`https://github.com/s18302277913/pokeemc`
 - GitHub Releases：`https://github.com/s18302277913/pokeemc/releases`
+- GitHub 当前版本：`https://github.com/s18302277913/pokeemc/releases/tag/v1.0.0-beta.1`
+- jar 直链：`https://github.com/s18302277913/pokeemc/releases/download/v1.0.0-beta.1/poketrade-1.0.0-beta.1.jar`
 - Modrinth：`[发布后回填]`
 - CurseForge：`[发布后回填]`
 - MC百科（MCMOD）：作者自行申请，地址 `[待申请]`

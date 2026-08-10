@@ -40,6 +40,7 @@
 
 ## 下载渠道
 
+- **GitHub Releases**：[PokeEMC 1.0.0-beta.1](https://github.com/s18302277913/pokeemc/releases/tag/v1.0.0-beta.1)
 - **CurseForge**：`[发布后补链接]`
 - **Modrinth**：`[发布后补链接]`
 - **MC百科（MCMOD）**：`[发布后补链接]`

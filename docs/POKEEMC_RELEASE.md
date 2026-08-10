@@ -65,6 +65,7 @@ PokeEMC 是 **NeoForge 1.21.1** 平台、以 **Pixelmon（像素宝可梦重铸�
 
 ## 下载渠道
 
+- **GitHub Releases**：[PokeEMC 1.0.0-beta.1](https://github.com/s18302277913/pokeemc/releases/tag/v1.0.0-beta.1)（当前正式下载入口）
 - **CurseForge**：`[发布后补链接]`
 - **Modrinth**：`[发布后补链接]`
 - **MC百科（MCMOD）**：`[发布后补链接]`
