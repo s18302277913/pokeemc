@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    { "item": "poketrade:transmutation_table" },
+    { "item": "poketrade:alchemical_coal" }
+  ],
+  "result": {
+    "count": 1,
+    "id": "poketrade:portable_transmutation_table"
+  }
+}

@@ -217,14 +217,19 @@ public class StorageDiscoveryGameTests {
         player.getEnderChestInventory().setItem(0, new ItemStack(Items.DIAMOND, 1));
 
         // 本人查询：末影箱始终列出，27 格，能统计已放物品
+        // [CHANGED] 会话 #15-C：2 参 querySync 注入玩家名解析器，断言 ownerName 为真实玩家名
         List<StorageDescriptor> results = StorageServices.discovery().querySync(
-                query(actor, dim, (int) player.getX(), (int) player.getZ(), 16, 10));
+                query(actor, dim, (int) player.getX(), (int) player.getZ(), 16, 10),
+                id -> "Owner");
         StorageDescriptor ender = results.stream()
                 .filter(d -> d.storageId().adapterType().equals(VanillaEnderChestAdapter.TYPE_ID))
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("personal ender chest must be listed"));
         check(ender.ownerId().equals(actor), "ender chest must be owned by the actor");
-        check(ender.displayName().contains("末影箱"), "ender chest must be named 末影箱");
+        check("Owner".equals(ender.ownerName()),
+                "ender chest ownerName must be resolved player name");
+        check(ender.displayName().contains("末影箱"),
+                "ender chest displayName must still contain 末影箱");
         check(ender.slotCount() == 27, "ender chest must expose 27 slots");
         check(ender.usedSlots() >= 0, "ender chest must report slot usage");
         check(ender.distance() == 0, "ender chest distance must be 0");

@@ -9,6 +9,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -58,7 +59,7 @@ class StorageValueObjectsTest {
     @Test
     void descriptorDefensivelyCopiesCapabilitiesAndValidatesCounts() {
         StorageDescriptor descriptor = new StorageDescriptor(
-                CHEST, "Chest", 3, true, UUID.randomUUID(),
+                CHEST, "Chest", 3, true, UUID.randomUUID(), "Alice",
                 EnumSet.of(StorageCapability.SNAPSHOT, StorageCapability.INSERT),
                 27, 5, 9, true);
 
@@ -67,13 +68,28 @@ class StorageValueObjectsTest {
                 () -> descriptor.capabilities().add(StorageCapability.EXTRACT));
 
         assertThrows(IllegalArgumentException.class, () -> new StorageDescriptor(
-                CHEST, "Chest", -1, false, null, Set.of(), 27, 0, 0, true));
+                CHEST, "Chest", -1, false, null, null, Set.of(), 27, 0, 0, true));
         assertThrows(IllegalArgumentException.class, () -> new StorageDescriptor(
-                CHEST, "Chest", 0, false, null, Set.of(), 27, 28, 0, true));
+                CHEST, "Chest", 0, false, null, null, Set.of(), 27, 28, 0, true));
         assertThrows(IllegalArgumentException.class, () -> new StorageDescriptor(
-                CHEST, "Chest", 0, false, null, Set.of(), 27, 0, -1, true));
+                CHEST, "Chest", 0, false, null, null, Set.of(), 27, 0, -1, true));
         assertThrows(NullPointerException.class, () -> new StorageDescriptor(
-                null, "Chest", 0, false, null, Set.of(), 27, 0, 0, true));
+                null, "Chest", 0, false, null, null, Set.of(), 27, 0, 0, true));
+    }
+
+    @Test
+    void descriptorToleratesNullAndTrimsOwnerName() {
+        // ownerName 允许 null（capabilities 用非空 EnumSet，空集合会触发 EnumSet.copyOf 的 IAE）
+        StorageDescriptor noOwner = new StorageDescriptor(
+                CHEST, "Chest", 0, false, null, null,
+                EnumSet.of(StorageCapability.SNAPSHOT), 27, 0, 0, true);
+        assertNull(noOwner.ownerName());
+
+        // 非 null 时 trim
+        StorageDescriptor trimmed = new StorageDescriptor(
+                CHEST, "Chest", 0, false, UUID.randomUUID(), "  Alice  ",
+                EnumSet.of(StorageCapability.SNAPSHOT), 27, 0, 0, true);
+        assertEquals("Alice", trimmed.ownerName());
     }
 
     @Test

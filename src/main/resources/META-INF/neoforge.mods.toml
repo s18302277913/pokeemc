@@ -6,10 +6,10 @@ issueTrackerURL="https://example.com/issues"
 [[mods]]
 modId="poketrade"
 version="${version}"
-displayName="PokeTrade"
+displayName="PokeEMC"
 logoFile="poketrade.png"
 description='''
-为 Pixelmon 物品提供宝可元（PKM）定价，并加入转化桌：将物品存入换算成宝可元存入玩家钱包，再用宝可元兑换任意已定价物品。金币系统与 Pixelmon 钱包共用同一数值。
+基于「等价交换」理念的 Pixelmon 附属模组：保留最简约的 EMC 经济，并加入交易系统、远程仓储与购物车。将物品存入换算成宝可元存入玩家钱包，再兑换任意已定价物品；认领后的箱子防破坏防爆炸，支持权限分享与远程浏览。金币系统与 Pixelmon 钱包共用同一数值。
 '''
 
 [[dependencies.poketrade]]
@@ -25,3 +25,8 @@ description='''
     versionRange="[9.3.0,)"
     ordering="AFTER"
     side="BOTH"
+
+# [CHANGED] 会话 #27：Mixin 配置（物品栏钱包数字缩写）。NeoForge 由 FML
+# LoadingModList.addMixinConfigs() 读取 [[mixins]] 声明并显式注册，非自动扫描。
+[[mixins]]
+config = "poketrade.mixins.json"

@@ -52,6 +52,9 @@ public class CondenserScreen extends AbstractContainerScreen<CondenserMenu> {
     private String lastQuery = null;
     private long lastPkmSnapshot = -1;
 
+    /** PKM 缓冲文本区域（局部坐标 {x1,y1,x2,y2}，renderLabels 每帧更新；悬停显示完整值）。 */
+    private int[] pkmBalanceBox;
+
     public CondenserScreen(CondenserMenu menu, Inventory playerInventory, Component title) {
         super(menu, playerInventory, title);
         this.imageWidth = BG_WIDTH;
@@ -141,10 +144,15 @@ public class CondenserScreen extends AbstractContainerScreen<CondenserMenu> {
     protected void renderLabels(GuiGraphics graphics, int mouseX, int mouseY) {
         graphics.drawString(this.font, this.title, this.titleLabelX, this.titleLabelY, PeStyle.TEXT_TITLE);
         // PKM 缓冲（标题同行右侧）
+        // [CHANGED] 会话 #26：大额缩写（1k/1m/1b/1t），与转化桌/交易所钱包一致（ADR-144）；
+        // 记录文本区域（局部坐标）供 renderTooltip 悬停显示完整千分位金额。
+        long pkm = menu.getPkm();
         String pkmText = Component.translatable("poketrade.gui.pkm").getString()
-                + ": " + FORMATTER.format(menu.getPkm());
-        graphics.drawString(this.font, pkmText, this.imageWidth - this.font.width(pkmText) - 8,
-                this.titleLabelY, PeStyle.TEXT_PKM);
+                + ": " + ExchangeUiModel.formatWallet(pkm);
+        int pkmX = this.imageWidth - this.font.width(pkmText) - 8;
+        this.pkmBalanceBox = new int[]{pkmX, this.titleLabelY,
+                this.imageWidth - 8, this.titleLabelY + 9};
+        graphics.drawString(this.font, pkmText, pkmX, this.titleLabelY, PeStyle.TEXT_PKM);
         // 槽位标签（在槽位上方，不与搜索框/槽位重叠）
         graphics.drawString(this.font, "投入", 44, 27, PeStyle.TEXT);
         graphics.drawString(this.font, "产出", 114, 27, PeStyle.TEXT);
@@ -181,6 +189,17 @@ public class CondenserScreen extends AbstractContainerScreen<CondenserMenu> {
     /** 悬停在列表条目上时显示名称与价格（避免价格数字压在图标上） */
     @Override
     protected void renderTooltip(GuiGraphics graphics, int mouseX, int mouseY) {
+        // [CHANGED] 会话 #26：悬停 PKM 缓冲（顶部缩写）显示完整千分位金额
+        if (pkmBalanceBox != null
+                && mouseX >= this.leftPos + pkmBalanceBox[0] && mouseX < this.leftPos + pkmBalanceBox[2]
+                && mouseY >= this.topPos + pkmBalanceBox[1] && mouseY < this.topPos + pkmBalanceBox[3]) {
+            graphics.renderTooltip(this.font, List.of(
+                            Component.translatable("poketrade.gui.pkm")
+                                    .withStyle(net.minecraft.ChatFormatting.YELLOW),
+                            Component.literal(FORMATTER.format(menu.getPkm()) + " PKM")),
+                    java.util.Optional.empty(), mouseX, mouseY);
+            return;
+        }
         int start = listStart();
         for (int i = 0; i < VISIBLE && start + i < filteredItems.size(); i++) {
             int col = i % COLUMNS;

@@ -94,6 +94,15 @@ public record StorageRecord(
                 createdAtEpochMillis, updatedAtEpochMillis, revision);
     }
 
+    /** 修正所有者名（惰性修复旧记录：如末影箱旧的"末影箱"哨兵 ownerName）。 */
+    public StorageRecord withOwnerName(String newOwnerName) {
+        return new StorageRecord(
+                ownerId, newOwnerName, displayName, grants,
+                templateBinding, templateMode,
+                automationInsertEnabled, automationExtractEnabled, listedInBrowser,
+                createdAtEpochMillis, updatedAtEpochMillis, revision);
+    }
+
     /** 写入或覆盖某个主体的授权。 */
     public StorageRecord withGrant(StoragePrincipal principal, StorageGrant grant) {
         Map<StoragePrincipal, StorageGrant> next = new LinkedHashMap<>(grants);

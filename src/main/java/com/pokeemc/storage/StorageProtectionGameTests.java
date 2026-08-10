@@ -1,7 +1,9 @@
 package com.pokeemc.storage;
 
 import com.pokeemc.storage.adapter.AbstractContainerAdapter;
+import com.pokeemc.storage.StorageProtectionEvents.ClaimResult;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerLevel;
@@ -10,8 +12,12 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.ChestType;
 import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.common.util.BlockSnapshot;
 import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
@@ -41,6 +47,8 @@ public class StorageProtectionGameTests {
 
     private static final String BATCH = "protection";
     private static final String SINGLE_CHEST = "vanilla_chest";
+    private static final String DOUBLE_CHEST = "vanilla_double_chest";
+    private static final String TRAPPED_CHEST = "vanilla_trapped_chest";
     private static final UUID OWNER = UUID.fromString("00000000-0000-0000-0000-000000000011");
 
     // ---------------------------------------------------------------- 破坏保护
@@ -158,6 +166,152 @@ public class StorageProtectionGameTests {
         check(protectedCount == 1, "exactly the claimed storage must be protected");
         check(affected.size() == 1 && affected.contains(ordinary),
                 "affected list must keep the ordinary block and drop the claimed one");
+        helper.succeed();
+    }
+
+    // ---------------------------------------------------------------- 双箱降级 + 刷新
+
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void doubleChestBrokenHalfDegradesToSingleClaim(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        StorageProtectionEvents protection = protection();
+        Player ownerPlayer = helper.makeMockPlayer(GameType.SURVIVAL);
+        UUID owner = ownerPlayer.getUUID();
+
+        BlockState facingNorth = Blocks.CHEST.defaultBlockState()
+                .setValue(ChestBlock.FACING, Direction.NORTH);
+        BlockPos rel1 = new BlockPos(1, 1, 1);
+        BlockPos rel2 = new BlockPos(2, 1, 1);
+        helper.setBlock(rel1, facingNorth);
+        BlockPos abs1 = helper.absolutePos(rel1);
+        BlockPos abs2 = helper.absolutePos(rel2);
+
+        check(protection.claim(level, abs1, owner, "Owner") == ClaimResult.CLAIMED,
+                "single chest claimed at primary");
+        helper.setBlock(rel2, facingNorth.setValue(ChestBlock.TYPE, ChestType.RIGHT));
+        check(protection.claim(level, abs2, owner, "Owner") == ClaimResult.MIGRATED,
+                "same-owner double chest must migrate the record to the canonical key");
+
+        // 破坏次半区（RIGHT）：走 onBreak 入队降级检查，剩余主半区随后降级为 SINGLE
+        BlockEvent.BreakEvent breakEvent = new BlockEvent.BreakEvent(
+                level, abs2, level.getBlockState(abs2), ownerPlayer);
+        protection.onBreak(breakEvent);
+        check(!breakEvent.isCanceled(), "owner break of a double-chest half must be allowed");
+        helper.setBlock(rel2, Blocks.AIR);
+        helper.setBlock(rel1, facingNorth);
+        protection.processPendingDoubleChecks();
+
+        StorageSavedData data = savedData(helper);
+        StorageRecord migrated = data.getRecord(StorageKey.of(dim(level), SINGLE_CHEST,
+                        AbstractContainerAdapter.toLocation(abs1)))
+                .orElseThrow(() -> new IllegalStateException(
+                        "remaining half must be claimed as a single chest after degradation"));
+        check(migrated.ownerId().equals(owner), "degraded single claim must keep the owner");
+        check(migrated.grants().isEmpty(), "ACL must stay empty (no silent privilege expansion)");
+        check(data.getRecord(StorageKey.of(dim(level), DOUBLE_CHEST,
+                        AbstractContainerAdapter.toLocation(abs1))).isEmpty(),
+                "double-chest record must be gone after degradation");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void doubleChestPrimaryHalfBrokenMigratesToSecondary(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        StorageProtectionEvents protection = protection();
+        Player ownerPlayer = helper.makeMockPlayer(GameType.SURVIVAL);
+        UUID owner = ownerPlayer.getUUID();
+
+        BlockState facingNorth = Blocks.CHEST.defaultBlockState()
+                .setValue(ChestBlock.FACING, Direction.NORTH);
+        BlockPos rel1 = new BlockPos(1, 1, 1);
+        BlockPos rel2 = new BlockPos(2, 1, 1);
+        helper.setBlock(rel1, facingNorth);
+        BlockPos abs1 = helper.absolutePos(rel1);
+        BlockPos abs2 = helper.absolutePos(rel2);
+        check(protection.claim(level, abs1, owner, "Owner") == ClaimResult.CLAIMED,
+                "single chest claimed at primary");
+        helper.setBlock(rel2, facingNorth.setValue(ChestBlock.TYPE, ChestType.RIGHT));
+        check(protection.claim(level, abs2, owner, "Owner") == ClaimResult.MIGRATED,
+                "same-owner double chest must migrate the record to the canonical key");
+
+        // 破坏主半区（LEFT，第一个放置）：走 onBreak 入队降级检查，剩余次半区随后降级为 SINGLE
+        BlockEvent.BreakEvent breakEvent = new BlockEvent.BreakEvent(
+                level, abs1, level.getBlockState(abs1), ownerPlayer);
+        protection.onBreak(breakEvent);
+        check(!breakEvent.isCanceled(), "owner break of a double-chest half must be allowed");
+        helper.setBlock(rel1, Blocks.AIR);
+        helper.setBlock(rel2, facingNorth);
+        protection.processPendingDoubleChecks();
+
+        StorageSavedData data = savedData(helper);
+        StorageRecord migrated = data.getRecord(StorageKey.of(dim(level), SINGLE_CHEST,
+                        AbstractContainerAdapter.toLocation(abs2)))
+                .orElseThrow(() -> new IllegalStateException(
+                        "remaining half must be claimed as a single chest after degradation"));
+        check(migrated.ownerId().equals(owner), "degraded single claim must keep the owner");
+        check(data.getRecord(StorageKey.of(dim(level), DOUBLE_CHEST,
+                        AbstractContainerAdapter.toLocation(abs1))).isEmpty(),
+                "double-chest record must move off the broken primary");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void placingChestQueuesRefresh(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        StorageProtectionEvents protection = protection();
+        BlockPos abs = chest(helper, 1);
+
+        Player player = helper.makeMockPlayer(GameType.SURVIVAL);
+        BlockSnapshot snapshot = BlockSnapshot.create(level.dimension(), level, abs);
+        protection.onPlace(new BlockEvent.EntityPlaceEvent(
+                snapshot, Blocks.AIR.defaultBlockState(), player));
+        check(protection.hasPendingRefresh(),
+                "placing a chest must queue a storage-list refresh");
+
+        protection.flushQueuedRefresh(helper.getLevel().getServer());
+        check(!protection.hasPendingRefresh(),
+                "flushQueuedRefresh must clear the pending refresh flag");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void trappedDoubleChestDegradesToSingle(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        StorageProtectionEvents protection = protection();
+        Player ownerPlayer = helper.makeMockPlayer(GameType.SURVIVAL);
+        UUID owner = ownerPlayer.getUUID();
+
+        BlockState facingNorth = Blocks.TRAPPED_CHEST.defaultBlockState()
+                .setValue(ChestBlock.FACING, Direction.NORTH);
+        BlockPos rel1 = new BlockPos(1, 1, 1);
+        BlockPos rel2 = new BlockPos(2, 1, 1);
+        helper.setBlock(rel1, facingNorth);
+        BlockPos abs1 = helper.absolutePos(rel1);
+        BlockPos abs2 = helper.absolutePos(rel2);
+        check(protection.claim(level, abs1, owner, "Owner") == ClaimResult.CLAIMED,
+                "trapped chest claimed at primary");
+        helper.setBlock(rel2, facingNorth.setValue(ChestBlock.TYPE, ChestType.RIGHT));
+        check(protection.claim(level, abs2, owner, "Owner") == ClaimResult.ALREADY_CLAIMED,
+                "trapped double chest shares the same type key");
+
+        // 破坏主半区（第一个放置的 LEFT）：走 onBreak 入队降级检查，剩余次半区随后降级为 SINGLE
+        BlockEvent.BreakEvent breakEvent = new BlockEvent.BreakEvent(
+                level, abs1, level.getBlockState(abs1), ownerPlayer);
+        protection.onBreak(breakEvent);
+        check(!breakEvent.isCanceled(), "owner break of a trapped double-chest half must be allowed");
+        helper.setBlock(rel1, Blocks.AIR);
+        helper.setBlock(rel2, facingNorth);
+        protection.processPendingDoubleChecks();
+
+        StorageSavedData data = savedData(helper);
+        StorageRecord migrated = data.getRecord(StorageKey.of(dim(level), TRAPPED_CHEST,
+                        AbstractContainerAdapter.toLocation(abs2)))
+                .orElseThrow(() -> new IllegalStateException(
+                        "remaining trapped half must keep the claim after primary is broken"));
+        check(migrated.ownerId().equals(owner), "migrated trapped claim must keep the owner");
+        check(data.getRecord(StorageKey.of(dim(level), TRAPPED_CHEST,
+                        AbstractContainerAdapter.toLocation(abs1))).isEmpty(),
+                "trapped claim must move off the broken primary");
         helper.succeed();
     }
 

@@ -35,7 +35,10 @@ public class ExchangeMenu extends StorageBrowserMenu {
 
     public enum FailureReason {
         NONE, PERMISSION_DENIED, REVISION_CONFLICT, CONTENT_CHANGED, UNAVAILABLE,
-        WALLET_REJECTED, INVALID_REQUEST, INTERNAL_ERROR
+        WALLET_REJECTED, INVALID_REQUEST, INTERNAL_ERROR,
+        // [CHANGED] Bug 1：批量出售(附近箱子) 失败码细化，客户端据此显示明确文案
+        //（此前 nothing_to_sell/too_many 落入 INVALID_REQUEST，提示「请求无效」误导）。
+        NOTHING_TO_SELL, TOO_MANY
     }
 
     private static final int PLAYER_INV_START = 0;
@@ -52,7 +55,10 @@ public class ExchangeMenu extends StorageBrowserMenu {
     private final DataSlot resultNonce;
     private final DataSlot resultOperation;
     private final DataSlot resultReason;
-    /** 服务端打开菜单的玩家（钱包读写目标）；客户端构造时为 null */
+    /**
+     * [CHANGED] 会话 #28：服务端会话玩家（钱包读写目标）；客户端构造时为 LocalPlayer
+     * （不命中任何 {@code instanceof ServerPlayer} 守卫，行为等价原 null 语义）。
+     */
     private final Player ownerPlayer;
     /** 客户端构造时保留的背包引用（收起/展开时重排玩家槽位坐标用） */
     private final Inventory playerInventoryRef;
@@ -62,12 +68,17 @@ public class ExchangeMenu extends StorageBrowserMenu {
         this(containerId, playerInventory, null);
     }
 
-    /** 服务端构造：绑定转化桌方块（8 格内可达）。 */
+    /**
+     * 服务端构造：{@code table} 可为 null（便携转化桌手持打开，无方块可达性校验）。
+     * 非 null 时绑定转化桌方块（8 格内可达）。
+     * [CHANGED] 会话 #28：钱包读写目标判定由 {@code table != null} 改为
+     * {@code instanceof ServerPlayer}，使便携构造也能同步钱包并正确初始化交易结果码。
+     */
     public ExchangeMenu(int containerId, Inventory playerInventory, TransmutationTableBlockEntity table) {
         super(ModMenuTypes.EXCHANGE.get(), containerId, playerInventory,
                 table == null ? null : p ->
                         table.getBlockPos().closerToCenterThan(p.position(), 8.0));
-        this.ownerPlayer = table != null ? playerInventory.player : null;
+        this.ownerPlayer = playerInventory.player;
         this.playerInventoryRef = playerInventory;
         // 玩家背包槽位（保证背包物品可渲染/可交互、Shift 快速移动可用）
         for (int row = 0; row < 3; ++row) {
@@ -87,11 +98,11 @@ public class ExchangeMenu extends StorageBrowserMenu {
         this.resultNonce = addDataSlot(DataSlot.standalone());
         this.resultOperation = addDataSlot(DataSlot.standalone());
         this.resultReason = addDataSlot(DataSlot.standalone());
-        if (table != null) {
+        // [CHANGED] 会话 #28：便携模式（table=null）同样需要初始化结果码为 -1，
+        // 否则 SUCCESS(ordinal=0) 会被客户端（nonce 自 -1 起步比对）误报为"交易成功"。
+        if (playerInventory.player instanceof ServerPlayer sp) {
             this.resultCode.set(-1);
             this.resultOperation.set(Operation.NONE.ordinal());
-        }
-        if (table != null && playerInventory.player instanceof ServerPlayer sp) {
             long balance = PixelmonWallet.getBalance(sp);
             balanceHi.set((int) (balance >> 32));
             balanceLo.set((int) (balance & 0xFFFFFFFFL));
@@ -171,7 +182,9 @@ public class ExchangeMenu extends StorageBrowserMenu {
      * 返回原始仓储事务结果供日志与调用方使用。</p>
      */
     public StorageTransactionResult runSell(ServerPlayer player, StorageSellPacket packet) {
-        if (ownerPlayer == null) {
+        // [CHANGED] 会话 #28：ownerPlayer 在客户端构造时为 LocalPlayer，
+        // 服务端入口（runSell 仅服务端调用）必须是 ServerPlayer 才能执行。
+        if (!(ownerPlayer instanceof ServerPlayer)) {
             return StorageTransactionResult.failure("invalid_menu", "sell requires server menu");
         }
         StorageTransactionResult result = ExchangeService.forServer().sell(
@@ -202,7 +215,10 @@ public class ExchangeMenu extends StorageBrowserMenu {
                     ExchangeService.FREE_ITEM,
                     "sell_disabled",
                     ExchangeService.SOURCE_EMPTY,
-                    ExchangeService.CONTENT_CHANGED -> TradeResult.OUTPUT_BLOCKED;
+                    ExchangeService.CONTENT_CHANGED,
+                    // [CHANGED] 会话 #16：批量操作（StorageBatchPacket）失败码
+                    "inventory_full", "nothing_to_sell", "too_many", "distance_exceeded",
+                    "invalid_location", "invalid_menu", "invalid_request" -> TradeResult.OUTPUT_BLOCKED;
             case ExchangeService.WALLET_REJECTED -> TradeResult.INSUFFICIENT_FUNDS;
             default -> TradeResult.INTERNAL_ERROR;
         };
@@ -221,8 +237,14 @@ public class ExchangeMenu extends StorageBrowserMenu {
                     StorageTransactionResult.CHUNK_UNLOADED,
                     StorageTransactionResult.NOT_CLAIMED -> FailureReason.UNAVAILABLE;
             case ExchangeService.WALLET_REJECTED -> FailureReason.WALLET_REJECTED;
+            // [CHANGED] Bug 1：nothing_to_sell/too_many 拆出为明确原因，不再笼统归为请求无效
+            case "nothing_to_sell" -> FailureReason.NOTHING_TO_SELL;
+            case "too_many" -> FailureReason.TOO_MANY;
             case ExchangeService.VALUE_OVERFLOW, ExchangeService.FREE_ITEM,
-                    ExchangeService.SOURCE_EMPTY, "sell_disabled" -> FailureReason.INVALID_REQUEST;
+                    ExchangeService.SOURCE_EMPTY, "sell_disabled",
+                    // [CHANGED] 会话 #16：批量操作失败码
+                    "inventory_full", "distance_exceeded",
+                    "invalid_location", "invalid_menu", "invalid_request" -> FailureReason.INVALID_REQUEST;
             default -> FailureReason.INTERNAL_ERROR;
         };
     }

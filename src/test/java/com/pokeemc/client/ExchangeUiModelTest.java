@@ -36,6 +36,7 @@ class ExchangeUiModelTest {
         assertEquals(layout.middle().x(), layout.catalogGrid().x());
         assertEquals(layout.middle().y() + 2, layout.catalogGrid().y());
         assertEquals(layout.controls().get("search"), layout.search());
+        assertEquals(layout.controls().get("modeText"), layout.modeText());
         assertEquals(layout.controls().get("pagePrev"), layout.pagePrev());
         assertEquals(layout.controls().get("pageNext"), layout.pageNext());
         assertEquals(layout.controls().get("deposit"), layout.deposit());
@@ -90,7 +91,7 @@ class ExchangeUiModelTest {
     }
 
     @Test
-    void cartGridSitsInsideRightColumnAndExposesTwentySevenCells() {
+    void cartGridSitsInsideRightColumnAndExposesFiftyFourCapacity() {
         ExchangeUiModel.Layout layout = ExchangeUiModel.Layout.expanded();
         ExchangeUiModel.Rect grid = layout.cartGrid();
 
@@ -98,12 +99,16 @@ class ExchangeUiModelTest {
         assertEquals(ExchangeUiModel.Layout.CART_COLS * 18, grid.width());
         assertEquals(ExchangeUiModel.Layout.CART_ROWS * 18, grid.height());
         assertTrue(layout.contains(grid));
-        // 7x4 网格共 28 个格位，但购物车容量为 27：渲染/点击只使用前 27 格
+        // [CHANGED] Bug 6：可见格 28（7x4），购物车容量升为 54（双箱），多余部分行式滚动
         assertEquals(28, (grid.width() / 18) * (grid.height() / 18));
-        assertEquals(27, ExchangeUiModel.Layout.CART_CELLS);
-        int lastCell = ExchangeUiModel.Layout.CART_CELLS - 1;
-        assertTrue(lastCell % ExchangeUiModel.Layout.CART_COLS < ExchangeUiModel.Layout.CART_COLS);
-        assertTrue(lastCell / ExchangeUiModel.Layout.CART_COLS < ExchangeUiModel.Layout.CART_ROWS);
+        assertEquals(54, ExchangeUiModel.Layout.CART_CAPACITY);
+        // 54 格 → 内容 8 行，可见 4 行 → 最大行滚偏移 4；≤28 格（4 行）时偏移钳到 0
+        assertEquals(4, ExchangeUiModel.clampScroll(99,
+                ExchangeUiModel.accordionContentRows(54, ExchangeUiModel.Layout.CART_COLS),
+                ExchangeUiModel.Layout.CART_ROWS));
+        assertEquals(0, ExchangeUiModel.clampScroll(3,
+                ExchangeUiModel.accordionContentRows(28, ExchangeUiModel.Layout.CART_COLS),
+                ExchangeUiModel.Layout.CART_ROWS));
     }
 
     @Test
@@ -119,6 +124,32 @@ class ExchangeUiModelTest {
             assertTrue(layout.contains(layout.previewLines()));
             assertTrue(layout.previewLines().y() >= layout.previewModal().y());
             assertTrue(layout.previewLines().bottom() <= layout.previewModal().bottom());
+        }
+    }
+
+    @Test
+    void sellWholePopupStaysInsideWindowForEveryCollapseState() {
+        // [CHANGED] 会话 #21-C：一键出售模式选择弹窗控件几何——任何收起组合下完整落在窗口内，
+        // 两个选项左右并排且不重叠，「不再提示」与关闭在面板底部区域内。
+        for (ExchangeUiModel.Layout layout : List.of(
+                ExchangeUiModel.Layout.expanded(),
+                ExchangeUiModel.Layout.forCollapsed(true, false),
+                ExchangeUiModel.Layout.forCollapsed(false, true),
+                ExchangeUiModel.Layout.forCollapsed(true, true))) {
+            assertTrue(layout.contains(layout.sellWholeModal()));
+            assertTrue(layout.contains(layout.sellWholeAll()));
+            assertTrue(layout.contains(layout.sellWholeExpanded()));
+            assertTrue(layout.contains(layout.sellWholeDontAsk()));
+            assertTrue(layout.contains(layout.sellWholeClose()));
+            // 两个选项左右并排且互不重叠
+            assertTrue(layout.sellWholeAll().right() <= layout.sellWholeExpanded().x());
+            // 选项在标题下方、「不再提示」在选项下方
+            assertTrue(layout.sellWholeAll().y() >= layout.sellWholeModal().y());
+            assertTrue(layout.sellWholeDontAsk().y() >= layout.sellWholeAll().bottom());
+            // 全部子控件在面板内
+            assertTrue(layout.sellWholeAll().x() >= layout.sellWholeModal().x());
+            assertTrue(layout.sellWholeExpanded().right() <= layout.sellWholeModal().right());
+            assertTrue(layout.sellWholeClose().bottom() <= layout.sellWholeModal().bottom());
         }
     }
 
@@ -198,7 +229,7 @@ class ExchangeUiModelTest {
 
     @Test
     void cartMergesCapsCountsClearsAndFormatsTotal() {
-        ExchangeUiModel.Cart cart = new ExchangeUiModel.Cart(27, 64);
+        ExchangeUiModel.Cart cart = new ExchangeUiModel.Cart(ExchangeUiModel.Layout.CART_CAPACITY, 64);
         cart.add("minecraft:diamond", 16);
         cart.add("minecraft:diamond", 64);
         cart.add("minecraft:emerald", 2);
@@ -215,7 +246,7 @@ class ExchangeUiModelTest {
 
     @Test
     void cartRejectsNonPositiveAddsWithoutMutatingExistingLines() {
-        ExchangeUiModel.Cart cart = new ExchangeUiModel.Cart(27, 64);
+        ExchangeUiModel.Cart cart = new ExchangeUiModel.Cart(ExchangeUiModel.Layout.CART_CAPACITY, 64);
         assertTrue(cart.add("minecraft:diamond", 16));
 
         assertFalse(cart.add("minecraft:diamond", 0));
@@ -225,7 +256,7 @@ class ExchangeUiModelTest {
 
     @Test
     void cartAdditionCannotOverflowPastStackLimit() {
-        ExchangeUiModel.Cart cart = new ExchangeUiModel.Cart(27, 64);
+        ExchangeUiModel.Cart cart = new ExchangeUiModel.Cart(ExchangeUiModel.Layout.CART_CAPACITY, 64);
         assertTrue(cart.add("minecraft:diamond", 63));
 
         assertTrue(cart.add("minecraft:diamond", Integer.MAX_VALUE));
@@ -428,14 +459,15 @@ class ExchangeUiModelTest {
     }
 
     @Test
-    void cartCapacityStopsAtTwentySevenLines() {
-        ExchangeUiModel.Cart cart = new ExchangeUiModel.Cart(27, 64);
-        for (int i = 0; i < 27; i++) {
+    void cartCapacityStopsAtFiftyFourLines() {
+        // [CHANGED] Bug 6：容量 27 → 54，第 55 种被拒
+        ExchangeUiModel.Cart cart = new ExchangeUiModel.Cart(ExchangeUiModel.Layout.CART_CAPACITY, 64);
+        for (int i = 0; i < ExchangeUiModel.Layout.CART_CAPACITY; i++) {
             assertTrue(cart.add("mod:item_" + i, 1), "add " + i + " should fit");
         }
-        assertEquals(27, cart.size());
-        assertFalse(cart.add("mod:item_27", 1), "28th distinct line must be rejected");
-        assertEquals(27, cart.size());
+        assertEquals(ExchangeUiModel.Layout.CART_CAPACITY, cart.size());
+        assertFalse(cart.add("mod:item_54", 1), "55th distinct line must be rejected");
+        assertEquals(ExchangeUiModel.Layout.CART_CAPACITY, cart.size());
     }
 
     @Test
@@ -447,6 +479,45 @@ class ExchangeUiModelTest {
         assertEquals(2, ExchangeUiModel.clampScroll(9, 3, 1));
         assertEquals(0, ExchangeUiModel.clampScroll(-1, 3, 1));
         assertEquals(2, ExchangeUiModel.clampScroll(5, 3, 1));
+    }
+
+    // ------------------------------------------------------------ 拿起抑制守卫（会话 #15-C）
+
+    @Test
+    void neverPickedUpSentinelNeverSuppressesRedeposit() {
+        // 从未拿起（哨兵 0 / 负数）：拖入仓储松开的回存永不被抑制
+        assertFalse(ExchangeUiModel.immediateRedepositSuppressed(0L, 1_786_000_000_000L));
+        assertFalse(ExchangeUiModel.immediateRedepositSuppressed(-1L, 1_786_000_000_000L));
+    }
+
+    @Test
+    void longMinValueSentinelNoLongerSwallowsDragDeposit() {
+        // 回归：旧哨兵 Long.MIN_VALUE 使 now - at 下溢为负、恒 < 200ms → 拖入被吞；
+        // 修复后 <0 一律按「从未拿起」处理，永不抑制。
+        assertFalse(ExchangeUiModel.immediateRedepositSuppressed(
+                Long.MIN_VALUE, 1_786_000_000_000L));
+    }
+
+    @Test
+    void pickupWithinWindowSuppressesSameGestureRedeposit() {
+        long now = 10_000L;
+        assertTrue(ExchangeUiModel.immediateRedepositSuppressed(now - 50L, now));
+        assertTrue(ExchangeUiModel.immediateRedepositSuppressed(now - 199L, now));
+    }
+
+    @Test
+    void pickupOutsideWindowAllowsRedeposit() {
+        long now = 10_000L;
+        // 窗口下界不含（恰好 200ms 不再抑制）
+        assertFalse(ExchangeUiModel.immediateRedepositSuppressed(now - 200L, now));
+        // 更早的拿起不再抑制
+        assertFalse(ExchangeUiModel.immediateRedepositSuppressed(now - 5_000L, now));
+    }
+
+    @Test
+    void futurePickupClockSkewNeverSuppresses() {
+        // 时钟回拨/未来时间戳：耗时负数，不抑制
+        assertFalse(ExchangeUiModel.immediateRedepositSuppressed(11_000L, 10_000L));
     }
 
     @Test
@@ -506,6 +577,71 @@ class ExchangeUiModelTest {
         // 空箱/非法 maxRows 兜底至少 1 行
         assertEquals(1, ExchangeUiModel.accordionVisibleRows(0, 7, 7));
         assertEquals(1, ExchangeUiModel.accordionVisibleRows(54, 7, 0));
+    }
+
+    // ===== [CHANGED] Bug 8：超宽箱子名跑马灯（纯函数，会话 #24c 头追尾传送带） =====
+
+    @Test
+    void marqueeXHeadChasesTailConveyorBelt() {
+        // 相邻副本间距 = nameWidth + gap（传送带节距）
+        assertEquals(60, ExchangeUiModel.marqueePeriod(50, 10));
+        // 基准副本左端 = rightEdge - period - phase：右缘向左一个节距起，相位按节距循环
+        assertEquals(40, ExchangeUiModel.marqueeX(0, 100, 50, 10, 30, 100));
+        assertEquals(39, ExchangeUiModel.marqueeX(100, 100, 50, 10, 30, 100));
+        assertEquals(35, ExchangeUiModel.marqueeX(500, 100, 50, 10, 30, 100));
+        // 满一个节距（60 步 × 100ms = 6000ms）回到基准；跨节距相位连续（无瞬移）
+        assertEquals(40, ExchangeUiModel.marqueeX(6000, 100, 50, 10, 30, 100));
+        assertEquals(39, ExchangeUiModel.marqueeX(6100, 100, 50, 10, 30, 100));
+        // 相位最末（period-1=59）：基准副本左端越过 leftEdge-nameWidth（尾部将出左界），
+        // 下一副本（+period=41）已进入可见区——头追尾：任意相位可见区恒有文字在流动
+        assertEquals(-19, ExchangeUiModel.marqueeX(5900, 100, 50, 10, 30, 100));
+        // 慢速 / 快速：speedMs 越大每像素耗时越长；非法速度兜底 1ms
+        assertEquals(40, ExchangeUiModel.marqueeX(0, 2000, 50, 10, 30, 100));
+        assertEquals(39, ExchangeUiModel.marqueeX(1, 0, 50, 10, 30, 100));
+        // 极窄可见区/零 gap 兜底 period ≥1，不除零
+        assertEquals(1, ExchangeUiModel.marqueePeriod(0, 0));
+        assertEquals(4, ExchangeUiModel.marqueeX(0, 100, 0, 0, 5, 5));
+    }
+
+    @Test
+    void marqueeConveyorAlwaysCoversViewport() {
+        // 从任意相位基准起、以 period 步进循环，可见区 [leftEdge,rightEdge] 内恒有副本相交
+        int nameW = 50, gap = 10, leftEdge = 30, rightEdge = 100;
+        int period = ExchangeUiModel.marqueePeriod(nameW, gap);
+        for (long t = 0; t < 12000; t += 37) { // 覆盖 0..2 个完整节距
+            int mx = ExchangeUiModel.marqueeX(t, 100, nameW, gap, leftEdge, rightEdge);
+            boolean covered = false;
+            for (int x = mx; x < rightEdge; x += period) {
+                if (x + nameW > leftEdge) {
+                    covered = true;
+                    break;
+                }
+            }
+            assertTrue(covered, "t=" + t + " mx=" + mx + " 可见区无文字");
+        }
+    }
+
+    // ===== [CHANGED] 会话 #25：钱包余额缩写（1k/1m/1b，仅钱包显示用） =====
+
+    @Test
+    void formatWalletAbbreviatesLargeBalances() {
+        // 千位以下原样整数
+        assertEquals("0", ExchangeUiModel.formatWallet(0));
+        assertEquals("950", ExchangeUiModel.formatWallet(950));
+        assertEquals("999", ExchangeUiModel.formatWallet(999));
+        // ≥1k：一位小数缩写并去尾零
+        assertEquals("1k", ExchangeUiModel.formatWallet(1000));
+        assertEquals("1.5k", ExchangeUiModel.formatWallet(1500));
+        assertEquals("12.3k", ExchangeUiModel.formatWallet(12345));
+        // ≥1m / ≥1b / ≥1t
+        assertEquals("1m", ExchangeUiModel.formatWallet(1_000_000));
+        assertEquals("5m", ExchangeUiModel.formatWallet(5_000_000));
+        assertEquals("1.2m", ExchangeUiModel.formatWallet(1_234_567));
+        assertEquals("2.5b", ExchangeUiModel.formatWallet(2_500_000_000L));
+        assertEquals("1t", ExchangeUiModel.formatWallet(1_000_000_000_000L));
+        // 负数带 - 前缀
+        assertEquals("-5k", ExchangeUiModel.formatWallet(-5_000));
+        assertEquals("-1.2m", ExchangeUiModel.formatWallet(-1_234_567));
     }
 
     // ===== [CHANGED] 会话 #11：仓储首次查询门（问题 1 自动展开） =====
@@ -582,5 +718,18 @@ class ExchangeUiModelTest {
             assertTrue(fits || row.nameMax() == 8,
                     "px=" + px + " nameMax=" + row.nameMax() + " priceX=" + row.priceX());
         }
+    }
+
+    // ===== [CHANGED] 会话 #21-D：预览条目列表滑条的「向下兼容」边界 =====
+
+    @Test
+    void previewScrollbarOnlyAppearsWhenLinesExceedVisibleRows() {
+        // 出售预览每页可见 PREVIEW_ROWS=6 行。滑条触发条件是总条目 > 可见行：
+        // ≤ 6 条时 pageCount=1（无滑条、不翻页 = 向下兼容旧行为）。
+        final int visible = ExchangeUiModel.Layout.PREVIEW_ROWS;
+        assertEquals(0, ExchangeUiModel.pageCount(0, visible), "空预览无页");
+        assertEquals(1, ExchangeUiModel.pageCount(visible, visible), "恰好一页不触发滑条");
+        assertEquals(1, ExchangeUiModel.pageCount(visible - 1, visible), "不足一页不触发滑条");
+        assertEquals(2, ExchangeUiModel.pageCount(visible + 1, visible), "超过一页才出现滑条/可翻页");
     }
 }

@@ -74,6 +74,10 @@ class StorageDiscoveryCoreTest {
         assertTrue(StorageDiscoveryService.LISTABLE_STORAGE_TYPES.contains("vanilla_double_chest"));
         assertTrue(StorageDiscoveryService.LISTABLE_STORAGE_TYPES.contains("vanilla_trapped_chest"));
         assertTrue(StorageDiscoveryService.LISTABLE_STORAGE_TYPES.contains("vanilla_barrel"));
+        // 潜影盒（素盒 + 染色盒）可列出
+        assertTrue(StorageDiscoveryService.LISTABLE_STORAGE_TYPES.contains("vanilla_shulker_box"));
+        assertTrue(StorageDiscoveryService.LISTABLE_STORAGE_TYPES.contains("vanilla_red_shulker_box"));
+        assertTrue(StorageDiscoveryService.LISTABLE_STORAGE_TYPES.contains("vanilla_light_blue_shulker_box"));
         // 模组容器（能量凝聚器等）不再出现在仓储列表
         assertFalse(StorageDiscoveryService.LISTABLE_STORAGE_TYPES.contains("poketrade_condenser"));
     }

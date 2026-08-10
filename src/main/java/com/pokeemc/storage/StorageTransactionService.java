@@ -251,6 +251,15 @@ public final class StorageTransactionService {
         if (srcStorage != null && t.sourceFingerprint() != 0) {
             long actual = srcStorage.handle().fingerprint(source.slotIndex());
             if (actual != t.sourceFingerprint()) {
+                // [CHANGED] 会话 #21-F Bug 1 诊断：区分「缓存过期」（刷新可解）与
+                // 「指纹不稳定」（二次读取不同，即使快照新鲜也会被拒）。
+                long again = srcStorage.handle().fingerprint(source.slotIndex());
+                LOGGER.warn("[storage-diag] move content_changed src={} slot={} clientFp={} "
+                                + "serverFpNow={} serverFpAgain={} (unstable={}) item={}x{}",
+                        t.source().storageId().asString(), source.slotIndex(),
+                        t.sourceFingerprint(), actual, again, actual != again,
+                        srcStorage.handle().itemId(source.slotIndex()),
+                        srcStorage.handle().count(source.slotIndex()));
                 return failWithSnapshots(
                         "content_changed", "source content changed",
                         srcStorage, tgtStorage);
@@ -259,6 +268,13 @@ public final class StorageTransactionService {
         if (tgtStorage != null && t.targetFingerprint() != 0) {
             long actual = tgtStorage.handle().fingerprint(target.slotIndex());
             if (actual != t.targetFingerprint()) {
+                long again = tgtStorage.handle().fingerprint(target.slotIndex());
+                LOGGER.warn("[storage-diag] move content_changed tgt={} slot={} clientFp={} "
+                                + "serverFpNow={} serverFpAgain={} (unstable={}) item={}x{}",
+                        t.target().storageId().asString(), target.slotIndex(),
+                        t.targetFingerprint(), actual, again, actual != again,
+                        tgtStorage.handle().itemId(target.slotIndex()),
+                        tgtStorage.handle().count(target.slotIndex()));
                 return failWithSnapshots(
                         "content_changed", "target content changed",
                         srcStorage, tgtStorage);

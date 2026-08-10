@@ -184,11 +184,14 @@ public final class StoragePayloadCodecs {
                 } else {
                     buf.writeBoolean(false);
                 }
+                writeString(buf, d.ownerName());
                 writeCapMask(buf, d.capabilities());
                 buf.writeInt(d.slotCount());
                 buf.writeInt(d.usedSlots());
                 buf.writeLong(d.revision());
                 buf.writeBoolean(d.scanComplete());
+                // [CHANGED] 会话 #21-E：追加放置时间戳（排序/标记基准）
+                buf.writeLong(d.createdAtEpochMillis());
             },
             buf -> {
                 StorageId id = STORAGE_ID.decode(buf);
@@ -196,13 +199,18 @@ public final class StoragePayloadCodecs {
                 int distance = buf.readInt();
                 boolean claimed = buf.readBoolean();
                 UUID ownerId = buf.readBoolean() ? readUuid(buf) : null;
+                String ownerName = readString(buf);
+                if (ownerName.isEmpty()) {
+                    ownerName = null;
+                }
                 EnumSet<StorageCapability> caps = readCapMask(buf);
                 int slotCount = buf.readInt();
                 int usedSlots = buf.readInt();
                 long revision = buf.readLong();
                 boolean scanComplete = buf.readBoolean();
-                return new StorageDescriptor(id, name, distance, claimed, ownerId, caps,
-                        slotCount, usedSlots, revision, scanComplete);
+                long createdAt = buf.readLong();
+                return new StorageDescriptor(id, name, distance, claimed, ownerId, ownerName, caps,
+                        slotCount, usedSlots, revision, scanComplete, createdAt);
             });
 
     public static final StreamCodec<ByteBuf, List<StorageDescriptor>> DESCRIPTOR_LIST =

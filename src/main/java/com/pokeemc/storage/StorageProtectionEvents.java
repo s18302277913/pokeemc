@@ -1,10 +1,12 @@
 package com.pokeemc.storage;
 
 import com.mojang.logging.LogUtils;
+import com.pokeemc.network.StorageChangedPacket;
 import com.pokeemc.registry.ModBlocks;
 import com.pokeemc.storage.adapter.AbstractContainerAdapter;
 import com.pokeemc.storage.adapter.ChestPairSupport;
 import com.pokeemc.storage.adapter.StorageAdapterRegistryImpl;
+import com.pokeemc.storage.adapter.VanillaShulkerBoxAdapter;
 import com.pokeemc.storage.discovery.StorageDiscoveryService;
 import com.pokeemc.thirdparty.ThirdPartyServices;
 import com.poketrade.api.permission.ProtectionAction;
@@ -13,11 +15,13 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.block.ShulkerBoxBlock;
 import net.minecraft.world.level.block.TrappedChestBlock;
 import net.minecraft.world.level.block.piston.PistonStructureResolver;
 import net.minecraft.world.level.block.state.BlockState;
@@ -26,6 +30,7 @@ import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.event.level.ExplosionEvent;
 import net.neoforged.neoforge.event.level.PistonEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
+import net.neoforged.neoforge.network.PacketDistributor;
 import org.slf4j.Logger;
 
 import java.util.ArrayDeque;
@@ -82,6 +87,10 @@ public final class StorageProtectionEvents {
     private final StorageDiscoveryService discovery;
     /** 放置后待认领队列（下一 tick 处理，避免在方块状态稳定前认领）。 */
     private final ArrayDeque<PendingClaim> pendingClaims = new ArrayDeque<>();
+    /** 双箱破坏后待降级检查队列（下一 tick 处理，破坏完成、另一半已变 SINGLE）。 */
+    private final ArrayDeque<PendingDoubleCheck> pendingDoubleChecks = new ArrayDeque<>();
+    /** 是否有待广播的仓储列表失效通知。 */
+    private boolean refreshQueued;
 
     public StorageProtectionEvents(StorageAdapterRegistryImpl registry,
                                    StorageDiscoveryService discovery) {
@@ -91,13 +100,15 @@ public final class StorageProtectionEvents {
 
     // ==================== 事件监听 ====================
 
-    /** 服务端 tick：增量刷新 + 处理延迟认领。 */
+    /** 服务端 tick：增量刷新 + 处理延迟认领与双箱降级检查 + 刷新通知。 */
     public void onServerTick(ServerTickEvent.Post event) {
         if (event.getServer() == null) {
             return;
         }
         discovery.tick();
         processPendingClaims();
+        processPendingDoubleChecks();
+        flushQueuedRefresh(event.getServer());
     }
 
     /** 放置事件：冲突则取消；否则标脏并排队下一 tick 认领。 */
@@ -121,6 +132,7 @@ public final class StorageProtectionEvents {
             return;
         }
         markDirty(serverLevel, pos);
+        refreshQueued = true;
         pendingClaims.addLast(new PendingClaim(
                 serverLevel, pos, player.getUUID(), player.getName().getString()));
     }
@@ -173,6 +185,13 @@ public final class StorageProtectionEvents {
             }
         }
         markDirty(serverLevel, pos);
+        // 双箱任一半区被破坏：下一 tick 检查另一半是否降级为单箱并迁移认领记录
+        if (isDoubleHalf(state)) {
+            pendingDoubleChecks.addLast(new PendingDoubleCheck(
+                    serverLevel, pos,
+                    pos.relative(ChestBlock.getConnectedDirection(state))));
+        }
+        refreshQueued = true;
     }
 
     /**
@@ -286,6 +305,87 @@ public final class StorageProtectionEvents {
                         pending.pos(), pending.ownerId(), e);
             }
         }
+    }
+
+    /**
+     * 处理积压的双箱降级检查（每 tick 全部处理，队列天然有界于破坏频率）。
+     * 公开供 GameTest 直接调用。
+     */
+    public void processPendingDoubleChecks() {
+        while (!pendingDoubleChecks.isEmpty()) {
+            PendingDoubleCheck pending = pendingDoubleChecks.removeFirst();
+            try {
+                handleDoubleCheck(pending);
+            } catch (RuntimeException e) {
+                LOGGER.warn("storage: double-chest degradation check failed at {}",
+                        pending.otherPos(), e);
+            }
+        }
+    }
+
+    /**
+     * 双箱破坏后半区降级为单箱：把双箱认领记录迁移到剩余半区的单箱键，
+     * 完整继承 owner/ACL（会话 #29：修复「双箱破坏一半剩下箱子失去认领」）。
+     *
+     * <p>上一 tick 的破坏事件已在 {@code onBreak} 入队，此刻另一半已由原版
+     * 邻居更新改为 {@code SINGLE}，状态稳定。不匹配（另一半也被破坏 / 仍双箱
+     * 成员 / 非箱类）一律跳过，双箱记录留待 {@code evaluate()} 幽灵清理。</p>
+     */
+    private void handleDoubleCheck(PendingDoubleCheck pending) {
+        ServerLevel level = pending.level();
+        BlockPos remaining = pending.otherPos();
+        if (!level.isLoaded(remaining)) {
+            return;
+        }
+        BlockState state = level.getBlockState(remaining);
+        if (isDoubleHalf(state)) {
+            return; // 仍为双箱成员（破坏被取消等），记录本就可用
+        }
+        String family = chestFamily(state);
+        if (family == null) {
+            return; // 非箱类（另一半也被破坏等）
+        }
+        String doubleType = "chest".equals(family) ? DOUBLE_CHEST : TRAPPED_CHEST;
+        String singleType = "chest".equals(family) ? SINGLE_CHEST : TRAPPED_CHEST;
+        String dim = level.dimension().location().toString();
+        BlockPos primary = ChestPairSupport.primaryOf(pending.brokenPos(), remaining);
+        StorageKey doubleKey = StorageKey.of(
+                dim, doubleType, AbstractContainerAdapter.toLocation(primary));
+        StorageKey singleKey = StorageKey.of(
+                dim, singleType, AbstractContainerAdapter.toLocation(remaining));
+        if (savedData(level).migrateRecord(doubleKey, singleKey,
+                remaining.getX() >> 4, remaining.getZ() >> 4)) {
+            markDirty(level, remaining);
+            LOGGER.info("storage: double {} degraded at {}, claim migrated {} -> {}",
+                    family, remaining, doubleKey, singleKey);
+        }
+        // migrateRecord 返回 false：无记录 / 主半区幸存且单双同键（陷阱箱）/
+        // 目标单箱键已存在 → 保守跳过，不覆盖既有记录
+    }
+
+    /**
+     * 广播仓储列表失效通知（会话 #29）：先重置所有在线玩家的查询限频缓存，
+     * 再发送 {@link StorageChangedPacket}，开着的仓储/交易所屏幕收到后以当前
+     * 条件重查、天然走全量扫描。空玩家列表为安全空操作（GameTest 环境无在线
+     * 浏览者）。公开供 GameTest 直接调用。
+     */
+    public void flushQueuedRefresh(MinecraftServer server) {
+        if (!refreshQueued) {
+            return;
+        }
+        refreshQueued = false;
+        if (server == null) {
+            return;
+        }
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            discovery.resetQueryState(player.getUUID());
+            PacketDistributor.sendToPlayer(player, new StorageChangedPacket());
+        }
+    }
+
+    /** 是否有待广播的刷新通知（GameTest 断言用）。 */
+    boolean hasPendingRefresh() {
+        return refreshQueued;
     }
 
     // ==================== 认领核心 ====================
@@ -444,6 +544,9 @@ public final class StorageProtectionEvents {
         if (state.getBlock() == ModBlocks.CONDENSER.get()) {
             return CONDENSER;
         }
+        if (state.getBlock() instanceof ShulkerBoxBlock shulker) {
+            return VanillaShulkerBoxAdapter.typeIdFor(shulker.getColor());
+        }
         return null;
     }
 
@@ -474,5 +577,10 @@ public final class StorageProtectionEvents {
     /** 待认领任务：位置 + 认领人。 */
     private record PendingClaim(ServerLevel level, BlockPos pos,
                                 UUID ownerId, String ownerName) {
+    }
+
+    /** 双箱破坏降级检查任务：破坏半区位置 + 另一半（可能幸存）位置。 */
+    private record PendingDoubleCheck(ServerLevel level, BlockPos brokenPos,
+                                      BlockPos otherPos) {
     }
 }

@@ -31,4 +31,11 @@ public interface BrowserHost {
     /** 收到移动/转移回执（默认忽略）。 */
     default void onMoveResponse(StorageMovePacket.Response response) {
     }
+
+    /**
+     * 仓储列表已变化（容器放置/破坏后服务端 S2C 通知，会话 #29）：
+     * 实现方应重新发起列表查询。默认忽略，仅浏览中屏幕按需重查。
+     */
+    default void onStorageListChanged() {
+    }
 }

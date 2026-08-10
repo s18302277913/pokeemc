@@ -74,10 +74,13 @@ public final class PriceOverrides {
         }
         // 大师球：购买价固定（硬校验，防止配置打破经济）；卖出价尊重数据包 sellPrice
         //（[CHANGED] Bug #3：不再强制 sell=0——物品已在数据包定义价格就应能卖入转化桌）。
+        // [CHANGED] 会话 #17（bug A 根治）：默认注入 buy=sell=5,000,000（买=卖，无套利），
+        // 大师球默认可回收——此前默认 sell=0 导致「任何球都无法贩卖」；数据包显式
+        // sellPrice 仍被尊重（作者可设 0 关闭回收）。
         OverridePrice mb = out.get(MASTER_BALL);
         if (mb == null) {
-            // 数据包未给出大师球时注入默认（买 500 万，默认不回收）
-            out.put(MASTER_BALL, new OverridePrice(MASTER_BALL_BUY_PRICE, 0L));
+            // 数据包未给出大师球时注入默认（买=卖 500 万，默认可回收）
+            out.put(MASTER_BALL, new OverridePrice(MASTER_BALL_BUY_PRICE, MASTER_BALL_BUY_PRICE));
         } else if (mb.buy() != MASTER_BALL_BUY_PRICE) {
             throw new IllegalStateException(
                     "配置错误：大师球购买价必须为 " + MASTER_BALL_BUY_PRICE + "，实际 " + mb.buy());

@@ -10,6 +10,7 @@ import com.pokeemc.storage.adapter.AbstractContainerAdapter;
 import com.pokeemc.storage.adapter.StorageAdapterRegistryImpl;
 import com.pokeemc.storage.adapter.StorageHandleExt;
 import com.pokeemc.storage.adapter.VanillaEnderChestAdapter;
+import com.pokeemc.storage.adapter.VanillaShulkerBoxAdapter;
 import com.poketrade.api.storage.StorageAdapter;
 import com.poketrade.api.storage.StorageAdapterContext;
 import com.poketrade.api.storage.StorageCapability;
@@ -28,13 +29,17 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.neoforged.neoforge.server.ServerLifecycleHooks;
 import org.slf4j.Logger;
@@ -55,10 +60,12 @@ public final class StorageDiscoveryService {
 
     private static final Logger LOGGER = LogUtils.getLogger();
 
-    /** 允许出现在仓储列表/浏览器中的适配器类型（仅原版容器；模组容器不识别）。 */
-    static final Set<String> LISTABLE_STORAGE_TYPES = Set.of(
-            "vanilla_chest", "vanilla_double_chest", "vanilla_trapped_chest", "vanilla_barrel",
-            VanillaEnderChestAdapter.TYPE_ID);
+    /** 允许出现在仓储列表/浏览器中的适配器类型（原版容器 + 潜影盒；模组容器不识别）。 */
+    static final Set<String> LISTABLE_STORAGE_TYPES = Stream.concat(
+            Stream.of("vanilla_chest", "vanilla_double_chest", "vanilla_trapped_chest",
+                    "vanilla_barrel", VanillaEnderChestAdapter.TYPE_ID),
+            VanillaShulkerBoxAdapter.all().stream().map(StorageAdapter::typeId))
+            .collect(Collectors.toUnmodifiableSet());
 
     private final StorageAdapterRegistryImpl registry;
     private final StorageAccessService access;
@@ -85,6 +92,15 @@ public final class StorageDiscoveryService {
         this.dirtyChunks = new BoundedDedupeSet<>(config.dirtyDedupeCapacity());
     }
 
+    /**
+     * 主动刷新前清除某 actor 的限频态与结果缓存，使下次查询走全量扫描
+     * （会话 #29：容器放置/破坏后广播 S2C 失效通知前调用）。
+     */
+    public void resetQueryState(UUID actorId) {
+        states.remove(actorId);
+        lastQueryTick.remove(actorId);
+    }
+
     // ==================== 同步查询 ====================
 
     /**
@@ -92,6 +108,14 @@ public final class StorageDiscoveryService {
      * 从不抛出也不会触发区块加载。
      */
     public List<StorageDescriptor> querySync(StorageQuery query) {
+        return querySync(query, StorageDiscoveryService::defaultActorName);
+    }
+
+    /**
+     * 服务端主线程执行的同步查询；{@code actorName} 用于解析末影箱等虚拟仓储的
+     * 所有者显示名（GameTest 可注入 mock 名，生产走在线玩家名解析）。
+     */
+    public List<StorageDescriptor> querySync(StorageQuery query, Function<UUID, String> actorName) {
         UUID actorId = query.actorId();
         long now = currentTick();
         Long last = lastQueryTick.get(actorId);
@@ -122,7 +146,7 @@ public final class StorageDiscoveryService {
             evaluate(level, data, key, query, radius, budget, hits);
         }
         // 玩家个人末影箱：虚拟仓储，始终按本人列出（不依赖世界方块）
-        addEnderChestCandidate(data, query, hits);
+        addEnderChestCandidate(data, query, actorName, hits);
         hits.sort(stableComparator(query.sort()));
 
         List<StorageDescriptor> results = toDescriptors(hits, maxResults);
@@ -322,9 +346,13 @@ public final class StorageDiscoveryService {
         hits.add(new Candidate(key, record, adapter, distance, slotCount, usedSlots, complete));
     }
 
-    /** 查询玩家个人末影箱：无记录则自动登记（owner=本人），再按权限/过滤加入候选。 */
+    /**
+     * 查询玩家个人末影箱：无记录则自动登记（owner=本人，ownerName=真实玩家名），
+     * 再按权限/过滤加入候选；已存在记录若是旧哨兵（ownerName 为空或"末影箱"）
+     * 则惰性修复为真实玩家名。
+     */
     private void addEnderChestCandidate(StorageSavedData data, StorageQuery query,
-                                        List<Candidate> hits) {
+                                        Function<UUID, String> actorName, List<Candidate> hits) {
         UUID actorId = query.actorId();
         StorageKey key = StorageKey.of("minecraft:overworld",
                 VanillaEnderChestAdapter.TYPE_ID, VanillaEnderChestAdapter.locationOf(actorId));
@@ -334,12 +362,21 @@ public final class StorageDiscoveryService {
         }
         StorageRecord record = data.getRecord(key).orElse(null);
         if (record == null) {
-            record = StorageRecord.create(actorId, "末影箱", System.currentTimeMillis());
+            record = StorageRecord.create(actorId, actorName.apply(actorId),
+                    System.currentTimeMillis());
             if (!data.claim(key, record, 0, 0)) {
                 record = data.getRecord(key).orElse(null);
             }
             if (record == null) {
                 return;
+            }
+        } else if (isLegacyEnderOwnerName(record.ownerName())) {
+            // 旧存档：displayName 与 ownerName 都被写成"末影箱"，惰性修复 ownerName
+            String resolved = actorName.apply(actorId);
+            if (!resolved.equals(record.ownerName())) {
+                data.updateRecord(key, record.revision(),
+                        r -> r.withOwnerName(resolved));
+                record = data.getRecord(key).orElse(record);
             }
         }
         if (!visibleTo(actorId, record)
@@ -365,6 +402,100 @@ public final class StorageDiscoveryService {
             // 打开失败：以元数据呈现并标记不完整
         }
         hits.add(new Candidate(key, record, adapter, 0, slotCount, usedSlots, complete));
+    }
+
+    // ==================== 批量操作扫描（会话 #16：批量出售「附近箱子」） ====================
+
+    /** 批量扫描结果：一个可售槽位（含服务端 revision 供并发校验）。 */
+    public record SellableSlot(StorageId storageId, long revision, int slotIndex,
+                               String itemId, int count, long fingerprint) {
+    }
+
+    /** 批量扫描结果：槽位列表 + 是否因上限截断。 */
+    public record ScanResult(List<SellableSlot> slots, boolean truncated) {
+    }
+
+    /**
+     * 服务端批量扫描「可出售」槽位（SELL 权限 + 适配器 SELL_SOURCE 能力，复用
+     * {@link #visibleTo}/{@link #passesFilter}）。仅扫描已加载区块，绝不强制加载；
+     * 受 {@code maxSlots} 上限约束（超限截断并置 {@code truncated}）。
+     * <p>复用 {@link #candidateKeys}/{@link #withinRadius}，但<b>不触碰</b>
+     * {@link #lastQueryTick}/{@link #states}（避免撞查询限频）。供
+     * {@code StorageBatchPacket} 的「批量出售同类（附近箱子）」使用。</p>
+     *
+     * @param itemId 非空时仅匹配该 itemId（「同类」过滤）；null 表示全部可售槽位（SELL_ALL）。
+     */
+    public ScanResult scanSellableSlots(UUID actorId, String dimension, int centerX, int centerZ,
+                                        int radius, String itemId, int maxSlots) {
+        MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
+        if (server == null) {
+            return new ScanResult(List.of(), false);
+        }
+        ServerLevel level = resolveLevel(server, dimension);
+        if (level == null) {
+            return new ScanResult(List.of(), false);
+        }
+        StorageSavedData data = savedData(server);
+        int r = config.clampRadius(radius, adminChecker.test(actorId));
+        StorageQuery query = new StorageQuery(actorId, dimension, centerX, centerZ, r,
+                null, StorageQuery.Sort.DISTANCE, StorageQuery.Filter.SELLABLE,
+                StorageQuery.DEFAULT_MAX_RESULTS);
+        // 预算：至少能扫够 maxSlots 的匹配槽（每仓储约出 4 槽），兼顾防呆
+        int budgetLimit = Math.max(config.maxScannedPerQuery(), Math.min(maxSlots, 64) * 4);
+        ScanBudget budget = new ScanBudget(budgetLimit);
+        List<SellableSlot> out = new ArrayList<>();
+        for (StorageKey key : candidateKeys(data, query, r)) {
+            BlockPos pos = AbstractContainerAdapter.parsePos(key.location());
+            if (pos == null) {
+                continue;
+            }
+            long dx = pos.getX() - (long) centerX;
+            long dz = pos.getZ() - (long) centerZ;
+            if (!withinRadius(dx, dz, r)) {
+                continue;
+            }
+            StorageRecord record = data.getRecord(key).orElse(null);
+            if (record == null) {
+                continue;
+            }
+            StorageAdapter adapter = registry.byTypeId(key.adapterType()).orElse(null);
+            if (adapter == null) {
+                continue;
+            }
+            if (!LISTABLE_STORAGE_TYPES.contains(key.adapterType())) {
+                continue;
+            }
+            if (!visibleTo(actorId, record)
+                    || !passesFilter(StorageQuery.Filter.SELLABLE, record, adapter.capabilities(), actorId)) {
+                continue;
+            }
+            if (!budget.consume() || !level.isLoaded(pos)) {
+                continue;
+            }
+            try (StorageHandle handle = adapter.open(new StorageAdapterContext(toStorageId(key))).orElse(null)) {
+                if (!(handle instanceof StorageHandleExt ext)) {
+                    continue;
+                }
+                for (int i = 0; i < ext.slotCount(); i++) {
+                    String id = ext.itemId(i);
+                    int count = ext.count(i);
+                    if (id == null || count <= 0) {
+                        continue;
+                    }
+                    if (itemId != null && !itemId.isBlank() && !itemId.equals(id)) {
+                        continue;
+                    }
+                    out.add(new SellableSlot(toStorageId(key), record.revision(),
+                            i, id, count, ext.fingerprint(i)));
+                    if (out.size() >= maxSlots) {
+                        return new ScanResult(List.copyOf(out), true);
+                    }
+                }
+            } catch (RuntimeException ignored) {
+                // 容器打开失败：跳过该仓储（与 evaluate 一致）
+            }
+        }
+        return new ScanResult(List.copyOf(out), false);
     }
 
     /** 结果按权限与可见性过滤：VIEW 或任一可执行动作。 */
@@ -400,9 +531,12 @@ public final class StorageDiscoveryService {
         List<StorageDescriptor> out = new ArrayList<>(limit);
         for (int i = 0; i < limit; i++) {
             Candidate c = hits.get(i);
-            out.add(new StorageDescriptor(toStorageId(c.key()), c.record().displayName(),
-                    c.distance(), true, c.record().ownerId(), c.adapter().capabilities(),
-                    c.slotCount(), c.usedSlots(), c.record().revision(), c.scanComplete()));
+            String display = bakedDisplayName(c);
+            out.add(new StorageDescriptor(toStorageId(c.key()), display,
+                    c.distance(), true, c.record().ownerId(), c.record().ownerName(),
+                    c.adapter().capabilities(),
+                    c.slotCount(), c.usedSlots(), c.record().revision(), c.scanComplete(),
+                    c.record().createdAtEpochMillis()));
         }
         return out;
     }
@@ -426,6 +560,73 @@ public final class StorageDiscoveryService {
         return new StorageId(key.dimension(), key.adapterType(), key.location());
     }
 
+    /**
+     * 烘焙显示名："玩家名的类型"（C-opt1）。自定义重命名（displayName 既不是
+     * 所有者名也不是类型名）时保留自定义名；否则拼成 {@code owner + "的" + type}。
+     */
+    private static String bakedDisplayName(Candidate c) {
+        String d = c.record().displayName();
+        String owner = c.record().ownerName();
+        String type = typeLabel(c.key().adapterType());
+        boolean hasOwner = owner != null && !owner.isBlank();
+        boolean hasType = type != null && !type.isBlank();
+        if (hasOwner && hasType && !d.equals(owner) && !d.equals(type)) {
+            // 玩家自定义重命名 → 保留自定义名
+            return d;
+        }
+        if (hasOwner && hasType) {
+            // 默认（displayName==ownerName 或 ==类型名，含末影箱）→ "玩家名"的"类型名"
+            return owner + "的" + type;
+        }
+        return d;
+    }
+
+    /** 适配器类型 ID → 中文类型名（与 lang 键文案一致）；未知类型返回 {@code null}。 */
+    static String typeLabel(String typeId) {
+        return switch (typeId) {
+            case "vanilla_chest" -> "箱子";
+            case "vanilla_double_chest" -> "双箱";
+            case "vanilla_trapped_chest" -> "陷阱箱";
+            case "vanilla_barrel" -> "木桶";
+            case VanillaEnderChestAdapter.TYPE_ID -> "末影箱";
+            case "poketrade_condenser" -> "能量凝聚器";
+            default -> shulkerBoxLabel(typeId);
+        };
+    }
+
+    /** 潜影盒类型 ID → 中文类型名；非潜影盒类型返回 {@code null}。 */
+    private static String shulkerBoxLabel(String typeId) {
+        if (typeId == null || !typeId.startsWith("vanilla_")
+                || !typeId.endsWith("_shulker_box")) {
+            return null;
+        }
+        String colorId = typeId.substring("vanilla_".length(),
+                typeId.length() - "_shulker_box".length());
+        if (colorId.isEmpty()) {
+            return "潜影盒"; // vanilla_shulker_box（素盒）
+        }
+        String colorName = switch (colorId) {
+            case "white" -> "白色";
+            case "orange" -> "橙色";
+            case "magenta" -> "品红色";
+            case "light_blue" -> "淡蓝色";
+            case "yellow" -> "黄色";
+            case "lime" -> "黄绿色";
+            case "pink" -> "粉色";
+            case "gray" -> "灰色";
+            case "light_gray" -> "淡灰色";
+            case "cyan" -> "青色";
+            case "purple" -> "紫色";
+            case "blue" -> "蓝色";
+            case "brown" -> "棕色";
+            case "green" -> "绿色";
+            case "red" -> "红色";
+            case "black" -> "黑色";
+            default -> null;
+        };
+        return colorName == null ? null : colorName + "潜影盒";
+    }
+
     // ==================== 纯逻辑（JVM 可测） ====================
 
     /** 欧氏距离平方是否落在半径内。 */
@@ -436,6 +637,23 @@ public final class StorageDiscoveryService {
     /** 查询频率判定：距上次查询不足 cooldownTicks 视为限频。 */
     public static boolean rateLimited(long lastTick, long nowTick, int cooldownTicks) {
         return nowTick - lastTick < cooldownTicks;
+    }
+
+    /** 默认玩家名解析：在线玩家取真实名；离线/测试兜底 UUID 前 8 位。 */
+    private static String defaultActorName(UUID actorId) {
+        MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
+        if (server != null) {
+            ServerPlayer player = server.getPlayerList().getPlayer(actorId);
+            if (player != null) {
+                return player.getName().getString();
+            }
+        }
+        return actorId.toString().substring(0, 8);
+    }
+
+    /** 是否为末影箱旧哨兵 ownerName（旧存档写入"末影箱"或空值）。 */
+    private static boolean isLegacyEnderOwnerName(String ownerName) {
+        return ownerName == null || ownerName.isBlank() || "末影箱".equals(ownerName);
     }
 
     private static boolean containsIgnoreCase(String text, String fragment) {

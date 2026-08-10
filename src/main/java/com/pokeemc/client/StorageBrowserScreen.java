@@ -259,10 +259,15 @@ public class StorageBrowserScreen
     }
 
     private StorageQuery.Sort querySort() {
+        // [CHANGED] 会话 #21-E：放置时间/标记排序在客户端本地完成（StorageViewModel），
+        // 服务端查询排序保持 DISTANCE 即可（客户端会按当前 SortMode 重排）。
         return switch (viewModel.getSortMode()) {
             case NAME -> StorageQuery.Sort.NAME;
             case FREE_SLOTS -> StorageQuery.Sort.FREE_SLOTS;
             case RECENTLY_UPDATED -> StorageQuery.Sort.RECENTLY_UPDATED;
+            // [CHANGED] 会话 #21-H 修订：物品总价值排序同样在客户端本地完成，服务端保持 DISTANCE
+            case CREATED_ASC, CREATED_DESC, MARKER_ASC, MARKER_DESC,
+                    VALUE_ASC, VALUE_DESC -> StorageQuery.Sort.DISTANCE;
             case DISTANCE -> StorageQuery.Sort.DISTANCE;
         };
     }
@@ -295,6 +300,12 @@ public class StorageBrowserScreen
                 && !viewModel.visibleStorages().isEmpty()) {
             selectStorage(viewModel.visibleStorages().get(0));
         }
+    }
+
+    /** 仓储列表已变化（StorageChangedPacket，会话 #29）：以当前条件重查。 */
+    @Override
+    public void onStorageListChanged() {
+        requestQuery();
     }
 
     @Override

@@ -2,8 +2,10 @@ package com.pokeemc.exchange;
 
 import com.pixelmonmod.api.registry.RegistryValue;
 import com.pixelmonmod.pixelmon.api.pokemon.item.pokeball.PokeBall;
+import com.pixelmonmod.pixelmon.api.pokemon.item.pokeball.PokeBallRegistry;
 import com.pixelmonmod.pixelmon.init.registry.PixelmonDataComponents;
 import com.pixelmonmod.pixelmon.items.PokeBallItem;
+import com.pokeemc.emc.PKMManager;
 import com.pokeemc.exchange.market.ExchangeWallet;
 import com.pokeemc.exchange.market.TradeMarketService;
 import com.pokeemc.exchange.price.ExchangePriceService;
@@ -248,6 +250,23 @@ public class ExchangeGameTests {
     }
 
     /**
+     * 会话 #16：balls.json（`#` 球种级键）必须已装载球层（getBallValue 返回覆盖价），
+     * 且不产生 `pixelmon:<球种>` 幽灵 id（snapshot 不含幽灵键）——大师球 tooltip
+     * 显示 256 修复的数据层验证（数据包在服务器启动时由 PkmDataLoader 装载）。
+     */
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void ballPkmDataLoadedWithoutGhostIds(GameTestHelper helper) {
+        check(helper, PKMManager.getBallValue("master_ball") == 5_000_000L,
+                "master_ball PKM 应为 5,000,000，实际 " + PKMManager.getBallValue("master_ball"));
+        check(helper, PKMManager.getBallValue("ultra_ball") == 1024L,
+                "ultra_ball PKM 应为 1024，实际 " + PKMManager.getBallValue("ultra_ball"));
+        boolean ghost = PKMManager.snapshot().containsKey(
+                ResourceLocation.fromNamespaceAndPath("pixelmon", "master_ball"));
+        check(helper, !ghost, "pixelmon:master_ball 幽灵键不应进入 PKM 快照");
+        helper.succeed();
+    }
+
+    /**
      * 会话 #14 回归：买入球种感知键必须还原 POKE_BALL 组件（BuyMarketService.buyBatch
      * 交付改经 PokeballIdentity.decode）——买入大师球到手是大师球，不降级成精灵球。
      */
@@ -277,5 +296,132 @@ public class ExchangeGameTests {
         }
         check(helper, found, "买入到手应是带 master_ball 组件的球，而非普通精灵球");
         helper.succeed();
+    }
+
+    /**
+     * 会话 #16 组 5（任务 E）：expansion.json（80 条原版高频品，分层价 128~294912）
+     * 必须已装载进 PKM 快照，且块价 = 组分 × 合成数（防「买块拆卖」套利）——
+     * 交易所 buy=sell 与数据自洽性由 PkmDataLoader 在服务器启动时保证。
+     */
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void expansionPricesLoadedWithSelfConsistentBlockValues(GameTestHelper helper) {
+        // 补齐的矿石/锭/战利品
+        check(helper, pkm("minecraft:copper_ingot") == 256L,
+                "copper_ingot PKM 应为 256（对齐 iron），实际 " + pkm("minecraft:copper_ingot"));
+        check(helper, pkm("minecraft:iron_ore") == 256L,
+                "iron_ore PKM 应为 256（=iron_ingot，防买矿炼锭卖套利），实际 " + pkm("minecraft:iron_ore"));
+        check(helper, pkm("minecraft:diamond_ore") == 8192L,
+                "diamond_ore PKM 应为 8192（=diamond），实际 " + pkm("minecraft:diamond_ore"));
+        check(helper, pkm("minecraft:elytra") == 65536L,
+                "elytra PKM 应为 65536，实际 " + pkm("minecraft:elytra"));
+        check(helper, pkm("minecraft:enchanted_golden_apple") == 32768L,
+                "enchanted_golden_apple PKM 应为 32768，实际 " + pkm("minecraft:enchanted_golden_apple"));
+        // 块价 = 组分 × 合成数（无套利）
+        check(helper, pkm("minecraft:iron_block") == 9L * pkm("minecraft:iron_ingot"),
+                "iron_block 应为 9×iron_ingot（2304），实际 " + pkm("minecraft:iron_block"));
+        check(helper, pkm("minecraft:gold_block") == 9L * pkm("minecraft:gold_ingot"),
+                "gold_block 应为 9×gold_ingot（18432），实际 " + pkm("minecraft:gold_block"));
+        check(helper, pkm("minecraft:diamond_block") == 9L * pkm("minecraft:diamond"),
+                "diamond_block 应为 9×diamond（73728，非 32768 防拆卖套利），实际 "
+                        + pkm("minecraft:diamond_block"));
+        check(helper, pkm("minecraft:netherite_block") == 4L * pkm("minecraft:netherite_ingot"),
+                "netherite_block 应为 4×netherite_ingot（294912），实际 " + pkm("minecraft:netherite_block"));
+        helper.succeed();
+    }
+
+    /**
+     * 会话 #16（bug 5 防御）：整组数量（64）批量出售必须成功——客户端 SellPreview
+     * 按 itemId 聚合（非堆叠物品如精灵球 64 个 = 64 槽 → 一行 count=64），服务端
+     * sellFromInventory 以 countInInventory 全背包统计校验，不得误报「数量无效」。
+     */
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void sellFromInventoryAcceptsFullStackQuantity(GameTestHelper helper) {
+        ServerPlayer p = player(helper);
+        MemoryWallet wallet = new MemoryWallet();
+        p.getInventory().add(stackOf("minecraft:stick", 64));
+        TradeResult r = new TradeMarketService(testPrices(), wallet).sellFromInventory(
+                p, List.of(new CartLine(STICK, 64)), "full-stack-" + System.nanoTime());
+        check(helper, r == TradeResult.SUCCESS, "整组 64 出售应成功，实际 " + r);
+        check(helper, wallet.getBalance(p) == 64L * 650L,
+                "钱包应 +64×650，实际 " + wallet.getBalance(p));
+        check(helper, countInInventory(p, "minecraft:stick") == 0,
+                "出售后背包应清空，剩余 " + countInInventory(p, "minecraft:stick"));
+        helper.succeed();
+    }
+
+    /**
+     * 会话 #17（bug A/E 根治回归）：生产目录必须包含全部球种（普通精灵球 base 与
+     * 全部 `pixelmon:poke_ball#<球种>`），且 buy=sell=PKM 值（无套利）——此前
+     * BALL_VALUES 不进 pkmFallback，目录无球条目，任何球都无法贩卖；balls.json
+     * 缺 base 普通精灵球，仓储普通精灵球「暂无定价」。数据经 PkmDataLoader 装载。
+     */
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void allBallVariantsPricedInServerCatalog(GameTestHelper helper) {
+        ExchangePriceService svc = ExchangePriceService.forServer();
+        for (String ball : List.of("poke_ball", "ultra_ball", "master_ball", "dream_ball")) {
+            TradeItemId id = TradeItemId.parse("pixelmon:poke_ball#" + ball);
+            PriceQuote q = svc.quote(id).orElse(null);
+            check(helper, q != null, "球种 " + ball + " 目录应有报价，实际 null");
+            if (q != null) {
+                check(helper, q.buyPrice() > 0 && q.buyPrice() == q.sellPrice(),
+                        "球种 " + ball + " 应 buy=sell>0（可买可卖无套利），实际 buy="
+                                + q.buyPrice() + " sell=" + q.sellPrice());
+            }
+        }
+        // base 普通精灵球（无组件 `pixelmon:poke_ball`）同样应可报价（balls.json base 键）
+        PriceQuote base = svc.quote(TradeItemId.parse("pixelmon:poke_ball")).orElse(null);
+        check(helper, base != null && base.sellPrice() > 0,
+                "base 普通精灵球应可回收，实际 " + base);
+        helper.succeed();
+    }
+
+    /**
+     * 会话 #17（bug B 服务端逻辑验证）：背包同时存在普通精灵球与大师球时，
+     * 出售大师球必须只扣大师球（球种精确识别），普通精灵球保留——
+     * 批量出售逐槽 itemId（pixelmon:poke_ball#<球种>）不得互相混淆。
+     */
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void sellFromInventoryDistinguishesBallVariants(GameTestHelper helper) {
+        RegistryValue<PokeBall> poke = PokeBallRegistry.getPokeBall("poke_ball");
+        RegistryValue<PokeBall> master = PokeBallRegistry.getPokeBall("master_ball");
+        check(helper, poke != null && poke.isInitialized() && master != null && master.isInitialized(),
+                "Pixelmon poke_ball/master_ball 应已注册");
+        ServerPlayer p = player(helper);
+        MemoryWallet wallet = new MemoryWallet();
+        p.getInventory().add(PokeBallItem.of(poke.get(), 1));
+        p.getInventory().add(PokeBallItem.of(master.get(), 1));
+
+        Map<TradeItemId, OfficialPriceParser.DoublePrice> official = new HashMap<>();
+        Map<TradeItemId, PriceOverrides.OverridePrice> overrides = new HashMap<>();
+        TradeItemId pokeBall = TradeItemId.parse("pixelmon:poke_ball#poke_ball");
+        TradeItemId masterBall = TradeItemId.parse("pixelmon:poke_ball#master_ball");
+        overrides.put(pokeBall, new PriceOverrides.OverridePrice(256L, 256L));
+        overrides.put(masterBall, new PriceOverrides.OverridePrice(5_000_000L, 5_000_000L));
+        TradeResult r = new TradeMarketService(new ExchangePriceService(official, overrides), wallet)
+                .sellFromInventory(p, List.of(new CartLine(masterBall, 1)), "ball-sell-" + System.nanoTime());
+        check(helper, r == TradeResult.SUCCESS, "出售大师球应成功，实际 " + r);
+        check(helper, wallet.getBalance(p) == 5_000_000L,
+                "钱包应 +5,000,000（大师球），实际 " + wallet.getBalance(p));
+        boolean masterGone = true;
+        boolean pokeKept = false;
+        for (ItemStack s : p.getInventory().items) {
+            if (s.isEmpty() || !(s.getItem() instanceof PokeBallItem)) {
+                continue;
+            }
+            RegistryValue<PokeBall> ball = s.get(PixelmonDataComponents.POKE_BALL.get());
+            if (ball != null && "master_ball".equals(ball.get().getName())) {
+                masterGone = false; // 大师球不应残留
+            } else {
+                pokeKept = true; // 普通精灵球应保留
+            }
+        }
+        check(helper, masterGone, "大师球应已被出售扣除");
+        check(helper, pokeKept, "普通精灵球应保留（未与大师球混淆）");
+        helper.succeed();
+    }
+
+    /** PKM 快照查询 helper（未命中返回 -1）。 */
+    private static long pkm(String id) {
+        return PKMManager.getPkm(ResourceLocation.parse(id));
     }
 }

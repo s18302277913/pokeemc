@@ -218,6 +218,11 @@ public record StorageDepositCarriedPacket(
                     "carried item has no registry id", 0, 1);
         }
         if (!ext.simulateInsert(targetSlot, itemId, packet.count())) {
+            // [CHANGED] 会话 #21-F Bug 1 诊断：记录目标格被拒明细（该格现有物品/堆叠满）
+            PokeEMC.LOGGER.warn("[storage-diag] deposit target_blocked storageId={} slot={} "
+                            + "item={}x{} existing={}x{}",
+                    packet.storageId().asString(), targetSlot, itemId, packet.count(),
+                    ext.itemId(targetSlot), ext.count(targetSlot));
             return new StorageDepositPacket.Response(packet.sessionId(), false, "target_blocked",
                     "cannot insert into that slot", 0, 1);
         }

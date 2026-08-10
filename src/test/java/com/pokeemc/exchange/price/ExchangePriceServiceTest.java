@@ -184,6 +184,59 @@ class ExchangePriceServiceTest {
     }
 
     @Test
+    void categoryOverrideTakesPriorityOverBallFallback() {
+        // 会话 #16：数据驱动的分类覆盖（categories.json）必须优先于球类兜底与 Creative tab 扫描，
+        // 让「分类: unknown」的物品可经数据映射归类。
+        TradeItemId masterBall = TradeItemId.parse("pixelmon:poke_ball#master_ball");
+        ExchangePriceService.applyCategoryOverrides(Map.of(masterBall, "itemGroup.materials"));
+        try {
+            ExchangePriceService svc = service(Map.of(), Map.of(), Map.of(masterBall, 5_000_000L));
+            svc.rebuild();
+            var entry = svc.catalog().entries().stream()
+                    .filter(e -> e.quote().itemId().equals(masterBall))
+                    .findFirst().orElse(null);
+            assertNotNull(entry, "球类条目应出现在目录");
+            assertEquals("itemGroup.materials", entry.category(), "数据驱动覆盖应优先于球类兜底");
+        } finally {
+            ExchangePriceService.applyCategoryOverrides(Map.of());
+        }
+    }
+
+    @Test
+    void ballVariantWithoutOverrideFallsBackToPokeballs() {
+        // 会话 #16：球类（含 '#' 的 itemId）无覆盖时兜底到统一球类分类，
+        // 修复无组件 base 栈对带 POKE_BALL 组件 displayItems 恒失配导致的全球类 unknown。
+        TradeItemId masterBall = TradeItemId.parse("pixelmon:poke_ball#master_ball");
+        ExchangePriceService.applyCategoryOverrides(Map.of());
+        try {
+            ExchangePriceService svc = service(Map.of(), Map.of(), Map.of(masterBall, 5_000_000L));
+            var entry = svc.catalog().entries().stream()
+                    .filter(e -> e.quote().itemId().equals(masterBall))
+                    .findFirst().orElse(null);
+            assertNotNull(entry, "球类条目应出现在目录");
+            assertEquals("poketrade.category.pokeballs", entry.category(), "无覆盖球类应兜底精灵球分类");
+        } finally {
+            ExchangePriceService.applyCategoryOverrides(Map.of());
+        }
+    }
+
+    @Test
+    void rebuildClearsCategoryOverridesEffectOnLive() {
+        // 会话 #16：rebuild() 开头清空 CATEGORY_CACHE 并复位分类重试标志——
+        // 覆盖数据在 rebuild 后经 categoryOf 重新计算生效（数据驱动路径与缓存路径一致）。
+        TradeItemId coal = TradeItemId.parse("minecraft:coal");
+        ExchangePriceService.applyCategoryOverrides(Map.of(coal, "itemGroup.materials"));
+        try {
+            ExchangePriceService svc = service(Map.of(), Map.of(), Map.of(coal, 128L));
+            assertEquals("itemGroup.materials",
+                    svc.catalog().entries().get(0).category(),
+                    "覆盖分类应在目录条目上生效");
+        } finally {
+            ExchangePriceService.applyCategoryOverrides(Map.of());
+        }
+    }
+
+    @Test
     void liveCatalogTracksPkmVersionChanges() {
         // Bug A/B 回归：生产装配（live=true）读取全局 PKMManager 快照；
         // 合成树计算（setComputed）发生在目录构建之后，catalog() 必须按版本号惰性重建，

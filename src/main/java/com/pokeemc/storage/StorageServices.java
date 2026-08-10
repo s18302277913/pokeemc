@@ -12,6 +12,7 @@ import com.pokeemc.storage.adapter.VanillaBarrelAdapter;
 import com.pokeemc.storage.adapter.VanillaChestAdapter;
 import com.pokeemc.storage.adapter.VanillaDoubleChestAdapter;
 import com.pokeemc.storage.adapter.VanillaEnderChestAdapter;
+import com.pokeemc.storage.adapter.VanillaShulkerBoxAdapter;
 import com.pokeemc.storage.adapter.VanillaTrappedChestAdapter;
 import com.pokeemc.storage.discovery.StorageDiscoveryService;
 import com.poketrade.api.storage.StorageService;
@@ -53,6 +54,7 @@ public final class StorageServices {
         reg.register(new VanillaBarrelAdapter());
         reg.register(new VanillaEnderChestAdapter());
         reg.register(new CondenserAdapter());
+        VanillaShulkerBoxAdapter.all().forEach(reg::register);
         registry = reg;
         StorageSavedData.setAdapterTypeValidator(reg::isRegistered);
         accessService = new StorageAccessService(

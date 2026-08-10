@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.pokeemc.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "InventoryPixelmonMoneyMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

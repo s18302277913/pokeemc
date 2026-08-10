@@ -3,6 +3,7 @@ package com.pokeemc.exchange.price;
 import com.pokeemc.PokeEMC;
 import com.pokeemc.config.PokeTradeConfig;
 import com.pokeemc.emc.PKMManager;
+import com.pokeemc.network.CatalogChangedPacket;
 import com.pokeemc.storage.adapter.PokeballIdentity;
 import com.poketrade.api.TradeItemId;
 import com.poketrade.api.price.PriceCatalog;
@@ -15,11 +16,15 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.flag.FeatureFlags;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.neoforged.neoforge.network.PacketDistributor;
+import net.neoforged.neoforge.server.ServerLifecycleHooks;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -48,8 +53,15 @@ public final class ExchangePriceService {
     public static final long SELL_MULTIPLIER = 10L;
 
     private static volatile ExchangePriceService serverInstance;
-    /** 服务端 CreativeModeTab 内容是否已尝试重建（displayItems 依赖构建，见 {@link #ensureTabsBuilt}）。 */
-    private static volatile boolean tabsChecked;
+    /** 服务端 CreativeModeTab 内容是否已成功重建（displayItems 依赖构建，见 {@link #ensureTabsBuilt}）。 */
+    private static volatile boolean tabsBuilt;
+    /** 本 rebuild 周期内分类重建是否已失败（成功后不再重试；失败后由下一次 {@link #rebuild()} 复位重试一次）。 */
+    private static volatile boolean tabsRetryPending;
+    /**
+     * 数据驱动的分类覆盖（data/poketrade/exchange/categories.json），优先于 Creative tab 扫描与球类兜底。
+     * [CHANGED] 会话 #16：让「分类: unknown」的物品可经数据映射归类，且分类种类不再受制于创造标签数量。
+     */
+    private static volatile Map<TradeItemId, String> categoryOverrides = Map.of();
     /** 物品 → 分类键 缓存（分类查找遍历全部 tab displayItems，缓存避免目录重建时重复扫描）。 */
     private static final java.util.concurrent.ConcurrentHashMap<Item, String> CATEGORY_CACHE =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -63,6 +75,13 @@ public final class ExchangePriceService {
     private volatile PriceCatalog catalog = PriceCatalog.empty();
     /** 目录重建时记录的 PKM 快照版本；catalog() 读取时检测变化自动重建（Bug A/B 修复）。 */
     private volatile long catalogPkmVersion = -1;
+    /**
+     * 目录版本号：rebuild() 时单调递增，随目录 Response 下发，供客户端陈旧检测
+     * 与目录变更推送（会话 #16：服务端数据包重载后开着的交易所屏自动刷新）。
+     */
+    private volatile long catalogVersion = 0;
+    /** 已广播版本（避免同一版本重复通知玩家；-1 表示尚未通知）。 */
+    private volatile long lastNotifiedVersion = -1;
 
     /** 测试用构造：注入官方价与覆盖价（不读取全局静态快照）。 */
     public ExchangePriceService(
@@ -113,6 +132,11 @@ public final class ExchangePriceService {
 
     /** 重建目录（数据包重载后由 {@link OfficialPriceLoader#apply} / {@link ExchangeConfigLoader#apply} 调用）。 */
     public void rebuild() {
+        // [CHANGED] 会话 #16：目录重建时清空分类缓存并复位分类构建重试标志——
+        // 原静态 CATEGORY_CACHE 永不失效（球类分类修复后仍读旧 unknown 值）；
+        // tabsRetryPending 让上次失败的分类重建在本周期重试一次。
+        CATEGORY_CACHE.clear();
+        tabsRetryPending = false;
         // 生产实例每次重建都读取最新静态快照，保证数据包重载即时生效；
         // 测试实例保持构造时注入的快照语义。
         Map<TradeItemId, OfficialPriceParser.DoublePrice> officialSrc = live ? OfficialPriceLoader.prices() : official;
@@ -186,7 +210,43 @@ public final class ExchangePriceService {
         }
         this.catalog = new PriceCatalog(entries);
         this.catalogPkmVersion = PKMManager.version();
+        // [CHANGED] 会话 #16：目录重建（数据包重载 / PKM 快照变化触发惰性重建）后版本递增，
+        // 并通知所有玩家——客户端开着交易所屏时自动重拉目录，修复「有价无列表 + 列表不同步」。
+        this.catalogVersion++;
+        notifyCatalogChanged();
         PokeEMC.LOGGER.info("PokeEMC: exchange catalog rebuilt with {} entries", entries.size());
+    }
+
+    /** 当前目录版本号（rebuild 时 +1，随目录 Response 下发）。 */
+    public long catalogVersion() {
+        return catalogVersion;
+    }
+
+    /**
+     * [NEW] 会话 #21-H：目录「可见模式」变更后通知所有在线玩家重新拉取。
+     * 仅版本 +1 并广播，不重建价格目录（模式过滤由 ExchangeCatalogPacket.handle
+     * 应答时实时推导，价格/名单变更也自动生效）。复用既有私有 {@link #notifyCatalogChanged()}
+     * 的 lastNotifiedVersion 去重与 ServerLifecycleHooks 空守卫。
+     */
+    public void notifyCatalogChangedToPlayers() {
+        this.catalogVersion++;
+        notifyCatalogChanged();
+    }
+
+    /** 广播目录变更：服务端运行时通知所有玩家（客户端仅对开着的交易所屏触发重拉）。 */
+    private void notifyCatalogChanged() {
+        if (!live || catalogVersion == lastNotifiedVersion) {
+            return;
+        }
+        lastNotifiedVersion = catalogVersion;
+        MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
+        if (server == null) {
+            return; // 纯 JVM 单测 / 服务端未就绪：跳过广播
+        }
+        CatalogChangedPacket msg = new CatalogChangedPacket(catalogVersion);
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            PacketDistributor.sendToPlayer(player, msg);
+        }
     }
 
     /**
@@ -275,12 +335,42 @@ public final class ExchangePriceService {
                 continue;
             }
             try {
-                out.put(TradeItemId.parse(e.getKey().toString()), v);
+                TradeItemId id = TradeItemId.parse(e.getKey().toString());
+                // [CHANGED] 会话 #16：球类幽灵键（pixelmon:<球种>，注册表解析不到 base Item）
+                // 一律剔除，双保险防止其流入目录兜底（球类统一走 pixelmon:poke_ball#<球种>）。
+                if (baseItemMissing(id)) {
+                    continue;
+                }
+                out.put(id, v);
             } catch (IllegalArgumentException ex) {
                 // 非 TradeItemId 兼容路径（如含非法字符）的资源键跳过
             }
         }
+        // [CHANGED] 会话 #17（bug A/E 根治）：球层（PKMManager.ballSnapshot，数据源 balls.json）
+        // 逐球种生成 `pixelmon:poke_ball#<球种>` 目录兜底条目——此前球层不进 snapshot，
+        // 目录无任何球条目（仅 master_ball 有覆盖价且默认 sell=0），全部球「无法贩卖」、
+        // 仓储普通精灵球「暂无定价」。并入后 buy=sell=PKM 值（无套利），球可买可卖。
+        for (Object2LongMap.Entry<String> e : PKMManager.ballSnapshot().object2LongEntrySet()) {
+            long v = e.getLongValue();
+            if (v <= 0) {
+                continue;
+            }
+            try {
+                out.put(TradeItemId.parse("pixelmon:poke_ball#" + e.getKey()), v);
+            } catch (IllegalArgumentException ignored) {
+                // 球种名含非法字符（理论上不存在）：跳过
+            }
+        }
         return out;
+    }
+
+    /** 注册表是否解析不到该 id 的 base Item（球类幽灵键 / 未注册物品）。测试环境未 Bootstrap 时保守返回 false。 */
+    private static boolean baseItemMissing(TradeItemId id) {
+        try {
+            return PokeballIdentity.baseItem(id.toString()) == null;
+        } catch (LinkageError | RuntimeException e) {
+            return false;
+        }
     }
 
     private static long scaled(double value, long multiplier) {
@@ -297,6 +387,18 @@ public final class ExchangePriceService {
     }
 
     private static String categoryOf(TradeItemId id) {
+        // [CHANGED] 会话 #16：数据驱动的分类覆盖（categories.json）优先，
+        // 让「分类: unknown」的物品可经数据映射归类，且分类种类不再受制于创造标签数量。
+        String override = categoryOverrides.get(id);
+        if (override != null && !override.isBlank()) {
+            return override;
+        }
+        // [CHANGED] 会话 #16：球类 itemId 含 '#'（pixelmon:poke_ball#master_ball），
+        // 无组件 base 栈匹配带 POKE_BALL 组件的 tab displayItems 必失败 → 全球类 unknown。
+        // 球类改走组件感知匹配 + 统一球类兜底。
+        if (id.path().indexOf(PokeballIdentity.SEP) >= 0) {
+            return ballCategory(id);
+        }
         // [CHANGED] 会话 #14：球类 itemId 含 '#'，ResourceLocation.tryBuild 返回 null
         // 恒回退 unknown → 目录球类条目分类丢失。改为 baseItem 取基础 Item 再查缓存。
         Item item;
@@ -321,6 +423,26 @@ public final class ExchangePriceService {
     }
 
     /**
+     * 球类分类：经 {@link PokeballIdentity#decode} 还原带 POKE_BALL 组件的栈做组件感知匹配
+     * （tab displayItems 均带组件，无组件 base 栈恒失配）；未知球种或匹配失败时
+     * 兜底到统一球类分类 {@code poketrade.category.pokeballs}，杜绝全球类 unknown。
+     */
+    private static String ballCategory(TradeItemId id) {
+        try {
+            ItemStack stack = PokeballIdentity.decode(id.toString(), 1);
+            if (stack != null && !stack.isEmpty()) {
+                String key = computeCategory(stack);
+                if (key != null && !"unknown".equals(key)) {
+                    return key;
+                }
+            }
+        } catch (LinkageError | RuntimeException ignored) {
+            // decode 失败（未知球种 / 无 Pixelmon / 测试环境注册表未就绪）：落入兜底
+        }
+        return "poketrade.category.pokeballs";
+    }
+
+    /**
      * 确保服务端 CreativeModeTab 的 displayItems 已构建。
      *
      * <p>[CHANGED] Bug 4/5：服务端通常不构建创造标签内容（客户端打开创造菜单时才构建），
@@ -329,23 +451,40 @@ public final class ExchangePriceService {
      * {@link CreativeModeTabs#tryRebuildTabContents} 显式重建一次。</p>
      */
     private static void ensureTabsBuilt() {
-        if (tabsChecked) {
+        if (tabsBuilt || tabsRetryPending) {
             return;
         }
-        tabsChecked = true;
         try {
-            CreativeModeTabs.tryRebuildTabContents(
-                    FeatureFlags.DEFAULT_FLAGS, true,
-                    RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY));
+            // [CHANGED] 会话 #23：服务端构建必须用 server.registryAccess()（含数据包动态注册表/tag）。
+            // 原用 RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY) 不含 datapack tag，
+            // tag 驱动的 tab（functional/redstone/combat 等）生成时 getTag 抛异常中断 → 只有前几个
+            // 静态 tab 有内容，后续全空 → computeCategory 对多数物品返回 unknown；且
+            // tryRebuildTabContents 的 CACHED_PARAMETERS 使同参数重试返回 false 不再重建。
+            MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
+            RegistryAccess registry = server != null
+                    ? server.registryAccess()
+                    : RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY);
+            CreativeModeTabs.tryRebuildTabContents(FeatureFlags.DEFAULT_FLAGS, true, registry);
+            tabsBuilt = true;
         } catch (Throwable t) {
+            // [CHANGED] 会话 #16：失败不置 tabsBuilt（原一次性标志失败后永久 unknown）；
+            // 置 tabsRetryPending 由下一次 rebuild() 复位重试一次，防 catalog() 高频调用无限重试。
             PokeEMC.LOGGER.debug("PokeEMC: creative tab rebuild failed; categories fall back to unknown", t);
+            tabsRetryPending = true;
         }
     }
 
     /** 遍历全部 CATEGORY tab 的构建后内容，返回物品所属 tab 的可翻译分类键。 */
     private static String computeCategory(Item item) {
+        return computeCategory(new ItemStack(item));
+    }
+
+    /**
+     * 遍历全部 CATEGORY tab 的构建后内容，返回物品（含组件栈，如球类的 POKE_BALL 组件）所属 tab 的可翻译分类键。
+     * [CHANGED] 会话 #16：球类调用方用解码出的带组件栈，避免无组件 base 栈恒失配。
+     */
+    private static String computeCategory(ItemStack stack) {
         ensureTabsBuilt();
-        ItemStack stack = new ItemStack(item);
         for (CreativeModeTab tab : BuiltInRegistries.CREATIVE_MODE_TAB) {
             if (tab.getType() != CreativeModeTab.Type.CATEGORY) {
                 continue;
@@ -374,6 +513,16 @@ public final class ExchangePriceService {
             }
         }
         return "unknown";
+    }
+
+    /**
+     * 应用数据驱动的分类覆盖（data/poketrade/exchange/categories.json），优先于 Creative tab 扫描。
+     * 调用方（{@link ExchangeConfigLoader}）随后应触发 {@link #rebuild()} 使新分类生效。
+     */
+    public static void applyCategoryOverrides(Map<TradeItemId, String> map) {
+        categoryOverrides = map == null ? Map.of() : Map.copyOf(map);
+        // 数据驱动分类覆盖生效确认（会话 #23 修复加载后；加载失效时此处应恒为空 map）
+        PokeEMC.LOGGER.info("PokeEMC: applied {} category overrides", categoryOverrides.size());
     }
 
     private static String rarityOf(TradeItemId id) {

@@ -1,5 +1,6 @@
 package com.pokeemc.client;
 
+import com.pokeemc.PokeEMC;
 import com.pokeemc.config.PokeTradeConfig;
 import com.pokeemc.exchange.ExchangeService;
 import com.pokeemc.menu.ExchangeMenu;
@@ -11,6 +12,7 @@ import com.pokeemc.network.StorageDepositPacket;
 import com.pokeemc.network.StorageDepositCarriedPacket;
 import com.pokeemc.network.StorageManagePacket;
 import com.pokeemc.network.StorageMovePacket;
+import com.pokeemc.network.StorageBatchPacket;
 import com.pokeemc.network.StorageSellPacket;
 import com.pokeemc.network.StorageSnapshotPacket;
 import com.pokeemc.network.StorageWithdrawCarriedPacket;
@@ -39,6 +41,7 @@ import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -68,16 +71,22 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     /** 快照每页格数（7 列 × 2 行，{@code Layout.SNAP_COLS * Layout.SNAP_ROWS}）。 */
     private static final int SNAPSHOT_PAGE_CELLS =
             ExchangeUiModel.Layout.SNAP_COLS * ExchangeUiModel.Layout.SNAP_ROWS;
+    // [REMOVED] 会话 #21-F Bug 2：原 MAX_ACCORDION_ROWS=7 上限随每格小滑条一并移除——
+    // 展开箱现按容器全部行渲染（单箱 4、双箱 8），越界行由手风琴大滑条滚动访问。
+
     /**
-     * 手风琴展开网格的<b>最大</b>可见行数（面板高度受限：listTop=72，7 列 × 7 行 = 210px &lt; 226 底部按钮）。
-     * 实际可见行数按槽位数量自适应（单箱 4 行、双箱 7 行），双箱 8 行时仅最后一排需滚动。
-     * Bug #1：原固定 3 行使大箱子 27-53 格几乎不可达——滚动条不可点击、滚轮必须悬停网格上。
+     * 左栏手风琴列表的底部裁剪线（布局坐标）：列表/展开网格不得越过此线，
+     * 防止压住底部按钮（storageRefresh 等位于 y=228）。与 {@code accordionEntries()}
+     * 原字面量 226 一致；整体滚动条高度与 scissor 裁剪都以此为界。
      */
-    private static final int MAX_ACCORDION_ROWS = 7;
+    private static final int ACCORDION_BOTTOM_LIMIT = 226;
 
     private final StorageViewModel storage = new StorageViewModel();
     private final String sessionId = UUID.randomUUID().toString().substring(0, 8);
     private final List<ExchangeCatalogPacket.EntryWire> catalog = new ArrayList<>();
+    /** [NEW] 会话 #21-H 修订：服务端下发的全量出售价表（itemId → sellPrice>0），与浏览目录解耦——
+     *  学习模式目录只含「卖过」的物品，但出售预览必须覆盖全部有卖价的物品（修复学习模式卖不了）。 */
+    private Map<String, Long> sellPriceMap = Map.of();
     private final List<String> categories = new ArrayList<>();
     private final List<String> blockedItems = new ArrayList<>();
     private final List<String> allowedItems = new ArrayList<>();
@@ -85,10 +94,24 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     /** 服务端买入/出售总开关（随目录响应下发）。 */
     private boolean buyEnabled = true;
     private boolean sellEnabled = true;
-    private final ExchangeUiModel.Cart cart = new ExchangeUiModel.Cart(27, 1024);
+    // [CHANGED] Bug 6：购物车容量 27 → 54（双箱）
+    private final ExchangeUiModel.Cart cart = new ExchangeUiModel.Cart(ExchangeUiModel.Layout.CART_CAPACITY, 1024);
     private final ExchangeUiModel.Workflow workflow = new ExchangeUiModel.Workflow();
-    /** 仓储出售区：仓储槽位索引 -> 待出售条目（虚拟视图，真实物品留在仓储）。 */
-    private final Map<Integer, PendingSell> sellQueue = new LinkedHashMap<>();
+    /** [CHANGED] 会话 #21-B：操作说明帮助面板开关（helpButton 点击切换，点面板外关闭）。 */
+    private boolean showHelp;
+    /** [CHANGED] 会话 #21-C：一键出售模式选择弹窗开关（点击 sellWhole 显示）。 */
+    private boolean showSellWholePopup;
+    /** [CHANGED] 会话 #21-C：弹窗内当前作用域（初始取配置默认值，弹窗选择后写回配置）。 */
+    private PokeTradeConfig.SellWholeMode sellWholeMode = PokeTradeConfig.sellWholeMode();
+    /** [CHANGED] 会话 #21-C：弹窗内「不再提示」勾选态（弹窗打开时从配置读取）。 */
+    private boolean sellWholeDontAsk;
+    /** [NEW] 会话 #21-H 修订：仓储分类选择弹窗开关（点击 slotCategory 显示）。 */
+    private boolean showCategoryModal;
+    /** [NEW] 会话 #21-H 修订：分类弹窗滚动偏移（0 起；第 0 项为「全部」）。 */
+    private int categoryScroll;
+    /** 仓储出售区：仓储槽位索引 -> 待出售条目（虚拟视图，真实物品留在仓储）。
+     *  [CHANGED] 会话 #19：支持多箱子（一键出售所有展开箱子），key = storageId#slotIndex。 */
+    private final Map<String, PendingSell> sellQueue = new LinkedHashMap<>();
 
     /** 唯一几何来源：init/收起切换时由 {@link #applyLayout()} 重算并落位。 */
     private ExchangeUiModel.Layout layout = ExchangeUiModel.Layout.expanded();
@@ -103,6 +126,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     private int selectedCart = -1;
     private int catalogScroll;
     private String catalogRequestId;
+    /** 最近一次目录响应的服务端 catalogVersion（会话 #16：目录变更推送据此判断是否重拉）。 */
+    private long lastCatalogVersion = -1;
+    /** [NEW] 会话 #21-H：服务端目录模式（"LEARNING"/"FULL"），仅作 UI 指示器（学习过滤在服务端）。 */
+    private String catalogMode = "";
     private int cartScroll;
     /** 出售预览分页（每页 6 行，最多 27 行）。 */
     private int previewPage;
@@ -134,6 +161,26 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     private boolean awaitingSnapshotClear;
     /** 正在进行“拿起”操作（回执时显示拿起文案）。 */
     private boolean pendingPickup;
+    /**
+     * [CHANGED] 会话 #21-F Bug 1：非选中箱槽位操作挂起——点击未选中箱的格子时，
+     * 先选中该箱（异步请求新快照），但缓存快照可能过期（指纹/版本与服务端不符），
+     * 立即发操作会被服务端以 content_changed/revision_conflict 拒绝（反馈：列表
+     * 第 3 个箱子无法取出/贩卖/放置，「状态已变化」）。改为挂起到该箱新快照到达，
+     * 由 {@link #replayPendingSlotAction(StorageId)} 用新数据重放。选中变化即取消。
+     */
+    private PendingSlotAction pendingSlotAction;
+    private enum PendingSlotOp { PICKUP, WITHDRAW, CONTEXT_MENU }
+    private record PendingSlotAction(StorageId storageId, int slotIndex,
+                                     PendingSlotOp op, int x, int y) {
+    }
+    /**
+     * 上次拿起的时间戳（会话 #15-B：拿起后短暂窗口内抑制同一手势的立即回存）。
+     * 时间戳比 {@code pendingPickup} 布尔更可靠：即使回执提前清了布尔，仍记录"刚拿起"。
+     * [FIXED] 会话 #15-C：哨兵用 0（默认值）而非 Long.MIN_VALUE——后者使
+     * {@code now - at} 下溢为负、守卫恒真，拖入仓储格子的松开事件被全部吞掉。
+     * 判定收敛到 {@link ExchangeUiModel#immediateRedepositSuppressed}。
+     */
+    private long pendingPickupAt;
     /** 正在把 carried 存入其他仓储（回执时显示转移文案）。 */
     private String pendingCarriedTransferName;
     /** 拖动买：从目录按下的商品（左键）；松开时落到购物车=加入、落到背包=直接买入。 */
@@ -146,12 +193,16 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     private int slotCategoryIndex = -1;
     /** 展开的仓储（按 storageId 字符串）。 */
     private final java.util.Set<String> expandedStorages = new java.util.LinkedHashSet<>();
+    /** [CHANGED] 会话 #21-G：上次会话保存的展开/收起状态（storageId 列表，init 时从客户端
+     *  配置加载），首个查询回包据此恢复玩家选择——与范围档位持久化行为一致。 */
+    private final java.util.Set<String> savedExpandedStorages = new java.util.LinkedHashSet<>();
     /** [CHANGED] 会话 #11：首个仓储查询回包才自动展开首个仓储（修复 10 秒刷新把全收起误判为首次打开）。 */
     private final ExchangeUiModel.FirstQueryGate firstQueryGate = new ExchangeUiModel.FirstQueryGate();
     /** 每个仓储的快照与 revision（展开时拉取）。 */
     private final Map<String, StorageSnapshot> snapshotsByStorage = new java.util.HashMap<>();
     private final Map<String, Long> revisionsByStorage = new java.util.HashMap<>();
-    private final Map<String, Integer> storageScrolls = new java.util.HashMap<>();
+    // [REMOVED] 会话 #21-F Bug 2：移除每格小滑条（storageScrolls）——展开箱显示全部行，
+    // 由手风琴大滑条导航，不再嵌套滚动条。
     /** 手风琴列表滚动（按仓储条目计）。 */
     private int accordionScroll;
     /** 右键菜单（仓储槽位操作）。 */
@@ -215,14 +266,27 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             if (d.layer() != layer) {
                 continue;
             }
-            g.drawString(this.font, d.text(), screenX(d.x()), screenY(d.y()), d.color(), d.shadow());
+            // [CHANGED] 会话 #15-D：改回布局局部坐标，随 beginScaledRender 矩阵缩放
+            // （与 StorageBrowserScreen 现有做法一致；0.75/0.5 档轻微模糊为已接受取舍）。
+            if (layer == TextLayer.MAIN) {
+                // [CHANGED] Bug 7：MAIN 层文字 z 上移到 160（> 物品图标 renderItem z=150），
+                // 否则与物品重叠处的标签（标题/统计/槽位文字）被渲染物品的深度测试 LEQUAL 剔除吞掉。
+                // 仍低于弹窗/右键菜单 z=400，弹窗盖住主界面文字的行为不回归。
+                g.pose().pushPose();
+                g.pose().translate(0, 0, 160);
+                g.drawString(this.font, d.text(), d.x(), d.y(), d.color(), d.shadow());
+                g.pose().popPose();
+            } else {
+                g.drawString(this.font, d.text(), d.x(), d.y(), d.color(), d.shadow());
+            }
         }
     }
 
     private record ContextMenu(int x, int y, StorageItemSlot slot, StorageId storageId) {
     }
 
-    private record PendingSell(int slotIndex, String itemId, int count, long fingerprint) {
+    /** [CHANGED] 会话 #19：加 storageId 支持跨箱子待售（一键出售所有展开箱子）。 */
+    private record PendingSell(StorageId storageId, int slotIndex, String itemId, int count, long fingerprint) {
     }
 
     public ExchangeScreen(ExchangeMenu menu, Inventory playerInventory, Component title) {
@@ -267,8 +331,13 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         this.quantityBox.setValue("1");
         this.addWidget(this.quantityBox);
         // [CHANGED] 仓储扫描范围：点击切换按钮（档位见 ExchangeUiModel.STORAGE_RADIUS_STEPS，
-        // 每击翻倍，最大 648 后重置默认 16）。默认档位 16，与旧输入框行为一致。
-        storage.setRadius(16);
+        // 每击翻倍，最大 648 后重置默认 16）。[CHANGED] 会话 #21-D：初始档位读取客户端配置
+        // （storageRadius），玩家上次切换的档位持久化、重进交易所恢复。
+        storage.setRadius(PokeTradeConfig.storageRadius());
+        // [CHANGED] 会话 #21-G：加载上次保存的仓储展开/收起状态（重进交易所恢复；
+        // 空=首次使用，onQueryResponse 首个回包默认全部展开）。
+        savedExpandedStorages.clear();
+        savedExpandedStorages.addAll(PokeTradeConfig.expandedStorages());
         // 物品搜索框（过滤展开箱子的槽位；客户端本地过滤，不重新扫描）
         this.storageSearchBox = new EditBox(this.font, 0, 0, 10, 10,
                 Component.translatable("poketrade.gui.search"));
@@ -280,6 +349,12 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         });
         this.addWidget(this.storageSearchBox);
         syncEditBoxPositions();
+        // [CHANGED] 会话 #16：开屏先消费缓存的最近一次目录（无屏在途响应），
+        // 再发新鲜请求覆盖——避免冷启动/切屏时列表空白。
+        ExchangeCatalogPacket.Response cached = ClientCatalogCache.latest;
+        if (cached != null && cached.catalogVersion() != this.lastCatalogVersion) {
+            applyCatalog(cached);
+        }
         requestCatalog();
         requestStorages();
     }
@@ -353,9 +428,15 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         this.imageHeight = this.layout.height();
         this.leftPos = (this.width - this.imageWidth) / 2;
         this.topPos = (this.height - this.imageHeight) / 2;
-        // 标题居中：宝可梦交易所
-        this.titleLabelX = Math.max(0, (this.layout.width() - this.font.width(this.title.getString())) / 2);
-        this.titleLabelY = 4;
+        // 标题居中：宝可梦交易所。// [CHANGED] Bug 4：标题从顶行 y=4 下移到钱包行下方
+        // （wallet.y()=128 → 137），左栏收起时也照常显示（见 renderLabels）。
+        // [CHANGED] 会话 #21-B：X 改为<b>跟随中栏居中</b>（middle.x + (middle.width-titleW)/2，
+        // 而非整窗口居中——整窗宽随左右栏收起变化会令标题漂移，玩家指出这是逻辑谬误）；
+        // Y 从 wallet.y()+9=137 再往下挪到 +18=146（与 priceHint 对调让位）。
+        int titleW = this.font.width(this.title.getString());
+        this.titleLabelX = Math.max(0,
+                this.layout.middle().x() + (this.layout.middle().width() - titleW) / 2);
+        this.titleLabelY = this.layout.wallet().y() + 18;
         this.inventoryLabelX = this.layout.inventoryX();
         this.inventoryLabelY = this.layout.inventoryY() - 12;
         this.gridCols = this.layout.catalogGrid().width() / SLOT;
@@ -366,8 +447,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         this.menu.relayoutPlayerSlots(this.layout.inventoryX(), this.layout.inventoryY(), this.layout.hotbarY());
         this.catalogScroll = ExchangeUiModel.clampScroll(this.catalogScroll,
                 ExchangeUiModel.pageCount(visibleCatalog().size(), this.gridCols * ExchangeUiModel.Layout.GRID_ROWS), 1);
+        // [CHANGED] Bug 6：cartScroll 改行式钳制（totalRows = ceil(种类数/列数)，可见 4 行）。
         this.cartScroll = ExchangeUiModel.clampScroll(this.cartScroll,
-                ExchangeUiModel.pageCount(this.cart.size(), ExchangeUiModel.Layout.CART_CELLS), 1);
+                ExchangeUiModel.accordionContentRows(this.cart.size(), this.cartCols),
+                ExchangeUiModel.Layout.CART_ROWS);
     }
 
     // ================= 目录 =================
@@ -383,11 +466,32 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 this.activeCategory, this.sort));
     }
 
+    /**
+     * [NEW] 会话 #21-H 修订：学习模式出售成功后自动刷新目录——刚卖掉的物品立即进入
+     * 可买回列表。仅学习模式触发（全高亮目录不含出售历史维度，刷新无意义）。
+     * NeoForge 网络包按连接顺序处理，本方法紧接出售包发送，目录请求必在出售包之后
+     * 到达服务端，出售历史已记录，新条目可见。
+     */
+    private void refreshCatalogIfLearning() {
+        if ("LEARNING".equals(this.catalogMode)) {
+            requestCatalog();
+        }
+    }
+
     @Override
     public void onCatalogResponse(ExchangeCatalogPacket.Response packet) {
         if (!ExchangeUiModel.isCurrentCatalogResponse(this.catalogRequestId, packet.sessionId())) {
             return;
         }
+        applyCatalog(packet);
+    }
+
+    /**
+     * 应用目录响应（覆盖现有目录/分类/规则并记录服务端版本）。会话 #16：
+     * 抽取为公共路径——响应投递（{@link #onCatalogResponse}）与开屏时消费
+     * {@link com.pokeemc.client.ClientCatalogCache}（无屏在途响应）共用。
+     */
+    private void applyCatalog(ExchangeCatalogPacket.Response packet) {
         this.catalog.clear();
         this.catalog.addAll(packet.entries());
         this.categories.clear();
@@ -400,9 +504,37 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         this.allowlistEnabled = packet.allowlistEnabled();
         this.buyEnabled = packet.buyEnabled();
         this.sellEnabled = packet.sellEnabled();
+        // [CHANGED] 会话 #16：记录服务端目录版本，目录变更推送（CatalogChangedPacket）
+        // 携同一版本时不再重复拉取。
+        this.lastCatalogVersion = packet.catalogVersion();
         this.catalogScroll = 0;
         // C1：与 responder 的 lastSearchText 对齐，杜绝任何回填/重复字符造成的循环请求
         this.lastSearchText = this.searchBox == null ? "" : this.searchBox.getValue();
+        // [NEW] 会话 #21-H：记录服务端目录模式（学习/全高亮）供 UI 指示器；防御：当前选中分类
+        // 在模式切换后可能整体消失（如全高亮下的仅可买分类切回学习），复位为空回到"全部"。
+        this.catalogMode = packet.mode() == null ? "" : packet.mode();
+        // [NEW] 会话 #21-H 修订：保存全量出售价表（出售预览用，不受学习模式目录过滤影响）
+        this.sellPriceMap = packet.sellPrices() == null ? Map.of() : packet.sellPrices();
+        if (!this.catalogMode.isEmpty() && !this.categories.contains(this.activeCategory)) {
+            this.activeCategory = "";
+        }
+    }
+
+    /**
+     * 服务端目录已变更（CatalogChangedPacket，会话 #16）：版本与本地不同时重拉目录，
+     * 修复「有价但列表没有该物品 + 数据包重载后开着的屏幕列表不刷新」。
+     */
+    @Override
+    public void onCatalogChanged(long catalogVersion) {
+        if (catalogVersion != this.lastCatalogVersion) {
+            requestCatalog();
+        }
+    }
+
+    /** 仓储列表已变化（StorageChangedPacket，会话 #29）：以当前条件重查。 */
+    @Override
+    public void onStorageListChanged() {
+        requestStorages();
     }
 
     /**
@@ -525,12 +657,15 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             sellMessageColor = PeStyle.TEXT_ERROR;
             return;
         }
-        ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        // [CHANGED] 会话 #19：背包出售 itemId 必须经 PokeballIdentity.encode 编码球种——
+        // 注册表键只给 pixelmon:poke_ball，服务端 countInInventory 按 #球种 精确匹配，
+        // 坍缩键永不相等 → 报「数量无效」（玩家复反馈 bug）。非球物品 encode 仍为注册表键。
+        String id = PokeballIdentity.encode(stack);
         if (id == null) {
             return;
         }
         List<ExchangeUiModel.SourceLine> source = List.of(
-                new ExchangeUiModel.SourceLine(id.toString(),
+                new ExchangeUiModel.SourceLine(id,
                         stack.getHoverName().getString(), stack.getCount()));
         sellPreview = ExchangeUiModel.SellPreview.scan(source, sellPrices(), MAX_SELL_LINES,
                 requireConfirmValue, ExchangeUiModel.SellSource.INVENTORY,
@@ -555,18 +690,20 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (stack.isEmpty() || workflow.pending()) {
             return;
         }
-        ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        // [CHANGED] 会话 #19：同 inventorySource —— 球类须 encode 球种，注册表键会坍缩
+        // 成 pixelmon:poke_ball 导致服务端匹配不到、报「数量无效」。
+        String id = PokeballIdentity.encode(stack);
         if (id == null) {
             return;
         }
         // 无回收价的物品直接拦截，避免服务端回“未知物品”造成困惑
-        if (sellPrices().getOrDefault(id.toString(), 0L) <= 0L) {
+        if (sellPrices().getOrDefault(id, 0L) <= 0L) {
             sellMessage = t("poketrade.exchange.sell.no_price");
             sellMessageColor = PeStyle.TEXT_ERROR;
             return;
         }
         List<ExchangeSellPacket.LineWire> lines = List.of(
-                new ExchangeSellPacket.LineWire(id.toString(), stack.getCount()));
+                new ExchangeSellPacket.LineWire(id, stack.getCount()));
         if (lines.isEmpty()) {
             return;
         }
@@ -575,6 +712,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         }
         PacketDistributor.sendToServer(new ExchangeSellPacket(
                 UUID.randomUUID().toString(), UUID.randomUUID().toString(), lines));
+        // [NEW] 会话 #21-H 修订：学习模式卖完刷新目录（新卖过物品立即可买回）
+        refreshCatalogIfLearning();
         sellMessage = t("poketrade.exchange.sell.sent");
         sellMessageColor = PeStyle.TEXT_DIM;
     }
@@ -651,17 +790,19 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             if (stack.isEmpty()) {
                 continue;
             }
-            ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+            // [CHANGED] 会话 #19：球类必须 encode 球种，注册表键全球坍缩成 pixelmon:poke_ball——
+            // 既让批量出售把所有球种混为一行，又与服务端 #球种 匹配不上报「数量无效」。
+            String id = PokeballIdentity.encode(stack);
             if (id != null) {
-                source.add(new ExchangeUiModel.SourceLine(id.toString(), stack.getHoverName().getString(), stack.getCount()));
+                source.add(new ExchangeUiModel.SourceLine(id, stack.getHoverName().getString(), stack.getCount()));
             }
         }
         // 副手槽（40 号虚拟槽位在背包渲染区之外，单独补扫）
         ItemStack offhand = inv.offhand.isEmpty() ? ItemStack.EMPTY : inv.offhand.get(0);
         if (!offhand.isEmpty()) {
-            ResourceLocation id = BuiltInRegistries.ITEM.getKey(offhand.getItem());
+            String id = PokeballIdentity.encode(offhand);
             if (id != null) {
-                source.add(new ExchangeUiModel.SourceLine(id.toString(), offhand.getHoverName().getString(), offhand.getCount()));
+                source.add(new ExchangeUiModel.SourceLine(id, offhand.getHoverName().getString(), offhand.getCount()));
             }
         }
         return source;
@@ -687,38 +828,41 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
      * [CHANGED] 会话 #10：仓储取出使用的 Shift 键 = 非贩卖键的那只（OFF=任意 Shift），
      * 与 Shift 贩卖实现键位隔离，避免「左 Shift 点背包=卖、点仓储却取出」的混淆。
      */
+    /**
+     * [CHANGED] 会话 #19：仓储 Shift 快捷取出 = 任一 Shift 键。
+     * 此前按「非贩卖键」隔离（LEFT 配置下仅右 Shift 触发），玩家按左 Shift 点
+     * 仓储格子会落成「拿起」而非取出，反馈「Shift 快捷取出失效」。背包区 Shift
+     * 贩卖仍按配置键（{@link #shiftSellActive}），仓储区与背包区位置天然分离，
+     * 左右 Shift 点击仓储槽位均可取出，无键位混淆。
+     */
     private boolean storageWithdrawShift() {
-        return switch (PokeTradeConfig.shiftSellHand()) {
-            case LEFT -> InputConstants.isKeyDown(minecraft.getWindow().getWindow(),
-                    GLFW.GLFW_KEY_RIGHT_SHIFT);
-            case RIGHT -> InputConstants.isKeyDown(minecraft.getWindow().getWindow(),
-                    GLFW.GLFW_KEY_LEFT_SHIFT);
-            case OFF -> hasShiftDown();
-        };
+        return hasShiftDown();
     }
 
     /** [CHANGED] 会话 #10：Shift+左键点击背包物品 = 卖该格整叠。 */
     private void shiftSellStack(ItemStack stack) {
-        ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        // [CHANGED] 会话 #19：球类须 encode 球种（对齐服务端 countInInventory 匹配键）。
+        String id = PokeballIdentity.encode(stack);
         if (id == null) {
             return;
         }
         shiftSell(new ExchangeUiModel.SourceLine(
-                id.toString(), stack.getHoverName().getString(), stack.getCount()));
+                id, stack.getHoverName().getString(), stack.getCount()));
     }
 
     /** [CHANGED] 会话 #10：Shift+右键点击背包物品 = 卖背包+副手全部同 ID 物品（整组）。 */
     private void shiftSellGroup(ItemStack stack) {
-        ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        // [CHANGED] 会话 #19：整组出售按球种聚合——encode 球种键，避免所有球混为一组。
+        String id = PokeballIdentity.encode(stack);
         if (id == null) {
             return;
         }
-        long total = ExchangeUiModel.groupCount(inventorySource(), id.toString());
+        long total = ExchangeUiModel.groupCount(inventorySource(), id);
         if (total <= 0) {
             return;
         }
         shiftSell(new ExchangeUiModel.SourceLine(
-                id.toString(), stack.getHoverName().getString(), (int) total));
+                id, stack.getHoverName().getString(), (int) total));
     }
 
     /**
@@ -782,11 +926,19 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         }
         PacketDistributor.sendToServer(new ExchangeSellPacket(
                 UUID.randomUUID().toString(), UUID.randomUUID().toString(), lines));
+        // [NEW] 会话 #21-H 修订：学习模式卖完刷新目录（新卖过物品立即可买回）
+        refreshCatalogIfLearning();
         sellMessage = t("poketrade.exchange.sell.sent");
         sellMessageColor = PeStyle.TEXT_DIM;
     }
 
     private Map<String, Long> sellPrices() {
+        // [CHANGED] 会话 #21-H 修订：优先用服务端下发的全量出售价表——浏览目录在学习模式下
+        // 只含「卖过」的物品，若用它查价则新物品无卖价 → 出售预览丢弃所有行 → 卖不了。
+        // 价表为空（旧服务端/异常）时回退目录构建，保证行为不退化。
+        if (!sellPriceMap.isEmpty()) {
+            return sellPriceMap;
+        }
         Map<String, Long> prices = new LinkedHashMap<>();
         for (ExchangeCatalogPacket.EntryWire entry : catalog) {
             prices.put(entry.itemId(), entry.sellPrice());
@@ -816,24 +968,78 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     .toList();
             PacketDistributor.sendToServer(new ExchangeSellPacket(
                     UUID.randomUUID().toString(), UUID.randomUUID().toString(), lines));
+            // [NEW] 会话 #21-H 修订：学习模式卖完刷新目录（新卖过物品立即可买回）
+            refreshCatalogIfLearning();
         } else {
             sendStorageSell();
         }
     }
 
-    /** 出售预览里点击单条：只出售该物品（背包来源；仓储来源请用“确认出售”全部结算）。 */
+    /**
+     * 出售预览里点击单条：只出售该物品。
+     * [CHANGED] 会话 #21-D：背包来源发背包出售包；仓储来源改走 {@link #sellSingleStorageLine}
+     * 只卖该行匹配的全部待售槽位（此前仓储预览点击单条无任何反应）。
+     */
     private void sellSingleLine(ExchangeUiModel.PreviewLine line) {
-        if (sellPreview == null || sellPreview.source() != ExchangeUiModel.SellSource.INVENTORY
-                || workflow.pending()) {
+        if (sellPreview == null || workflow.pending()) {
             return;
         }
-        if (!workflow.begin(ExchangeUiModel.Operation.INVENTORY_SELL, menu.getResultNonce())) {
+        if (sellPreview.source() == ExchangeUiModel.SellSource.INVENTORY) {
+            if (!workflow.begin(ExchangeUiModel.Operation.INVENTORY_SELL, menu.getResultNonce())) {
+                return;
+            }
+            List<ExchangeSellPacket.LineWire> lines = List.of(
+                    new ExchangeSellPacket.LineWire(line.itemId(), line.count()));
+            PacketDistributor.sendToServer(new ExchangeSellPacket(
+                    UUID.randomUUID().toString(), UUID.randomUUID().toString(), lines));
+            // [NEW] 会话 #21-H 修订：学习模式卖完刷新目录（新卖过物品立即可买回）
+            refreshCatalogIfLearning();
             return;
         }
-        List<ExchangeSellPacket.LineWire> lines = List.of(
-                new ExchangeSellPacket.LineWire(line.itemId(), line.count()));
-        PacketDistributor.sendToServer(new ExchangeSellPacket(
-                UUID.randomUUID().toString(), UUID.randomUUID().toString(), lines));
+        sellSingleStorageLine(line.itemId());
+    }
+
+    /**
+     * [CHANGED] 会话 #21-D：仓储预览点击单条 → 只出售该行（itemId 匹配的全部待售槽位）。
+     * 从 sellQueue 收集匹配 PendingSell 构造子集 StorageSellPacket 发送（revisions 逐箱取），
+     * 成功后从队列移除并重建预览；队列空则关闭预览并提示。与「确认出售」走同一条服务端链路。
+     */
+    private void sellSingleStorageLine(String itemId) {
+        if (storagePreview == null || !storagePreview.canConfirm()) {
+            return;
+        }
+        if (!workflow.begin(ExchangeUiModel.Operation.STORAGE_SELL, menu.getResultNonce())) {
+            return;
+        }
+        List<PendingSell> matching = sellQueue.values().stream()
+                .filter(p -> itemId.equals(p.itemId())).toList();
+        if (matching.isEmpty()) {
+            return;
+        }
+        List<ExchangeService.SellEntry> entries = new ArrayList<>();
+        Map<StorageId, Long> revisions = new LinkedHashMap<>();
+        for (PendingSell p : matching) {
+            entries.add(new ExchangeService.SellEntry(
+                    p.storageId(), p.slotIndex(), p.count(), p.fingerprint()));
+            revisions.put(p.storageId(), revisionsByStorage.getOrDefault(
+                    p.storageId().asString(), -1L));
+        }
+        PacketDistributor.sendToServer(new StorageSellPacket(
+                sessionId, UUID.randomUUID().toString(), entries, revisions));
+        // [NEW] 会话 #21-H 修订：学习模式卖完刷新目录（新卖过物品立即可买回）
+        refreshCatalogIfLearning();
+        // 从待售队列移除已售条目；剩余条目重建预览，空则关闭预览
+        sellQueue.entrySet().removeIf(e -> itemId.equals(e.getValue().itemId()));
+        if (sellQueue.isEmpty()) {
+            sellPreview = null;
+            storagePreview = null;
+            previewConfirmed = false;
+            previewPage = 0;
+            sellMessage = t("poketrade.exchange.sell.sent");
+            sellMessageColor = PeStyle.TEXT_OK;
+        } else {
+            submitStorageSell();
+        }
     }
 
     private void cancelPreview() {
@@ -842,6 +1048,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             storagePreview = null;
             previewConfirmed = false;
             previewPage = 0;
+            // [CHANGED] 会话 #21-D：取消预览同时清空待售队列——仓储预览的条目即 sellQueue
+            // 的聚合，取消即放弃本次待售；此前残留 sellQueue 会在后续批量操作中被误检为
+            // 待售物品（玩家反馈「一键出售不出售后再点批量出售会检测仓储」的根因一环）。
+            sellQueue.clear();
         }
     }
 
@@ -853,10 +1063,123 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 StorageQuery.Sort.DISTANCE, StorageQuery.Filter.VIEWABLE, 200));
     }
 
-    /** [CHANGED] 点击切换仓储扫描半径档位（翻倍，最大 648 后重置 16），并重新发起扫描。 */
+    /** [CHANGED] 点击切换仓储扫描半径档位（翻倍，最大 648 后重置 16），并重新发起扫描。
+     *  [CHANGED] 会话 #21-D：切换后写回客户端配置，重进交易所恢复上次档位（玩家反馈
+     *  「范围不会自动应用保存」——此前只改内存不落盘）。 */
     private void cycleStorageRadius() {
-        storage.setRadius(ExchangeUiModel.nextStorageRadius(storage.getRadius()));
+        int next = ExchangeUiModel.nextStorageRadius(storage.getRadius());
+        storage.setRadius(next);
+        PokeTradeConfig.setStorageRadius(next);
         requestStorages();
+    }
+
+    /** [NEW] 会话 #21-H 修订：分类选择弹窗可视行数与行高（每行 12px，标题下方最多 9 行）。 */
+    private static final int CATEGORY_VISIBLE_ROWS = 9;
+    private static final int CATEGORY_ROW_H = 12;
+
+    /** [CHANGED] 会话 #21-E：仓储列表排序档循环（距离 → 放置时间升/降 → 标记正/倒序）。
+     *  [NEW] 会话 #21-H 修订：追加物品总价值正/倒序档。 */
+    private static final StorageViewModel.SortMode[] STORAGE_SORT_CYCLE = {
+            StorageViewModel.SortMode.DISTANCE,
+            StorageViewModel.SortMode.CREATED_ASC,
+            StorageViewModel.SortMode.CREATED_DESC,
+            StorageViewModel.SortMode.MARKER_ASC,
+            StorageViewModel.SortMode.MARKER_DESC,
+            StorageViewModel.SortMode.VALUE_ASC,
+            StorageViewModel.SortMode.VALUE_DESC,
+    };
+
+    /**
+     * [CHANGED] 会话 #21-F Bug 3：一键展开/一键收起切换。全部可见箱子已展开 → 全部收起；
+     * 否则展开全部（新展开者若无快照则请求拉取）。
+     */
+    private void toggleAllExpanded() {
+        List<StorageDescriptor> visible = storage.visibleStorages();
+        if (visible.isEmpty()) {
+            return;
+        }
+        boolean allExpanded = true;
+        for (StorageDescriptor d : visible) {
+            if (!expandedStorages.contains(d.storageId().asString())) {
+                allExpanded = false;
+                break;
+            }
+        }
+        if (allExpanded) {
+            for (StorageDescriptor d : visible) {
+                expandedStorages.remove(d.storageId().asString());
+            }
+            persistExpandedStorages();
+            return;
+        }
+        for (StorageDescriptor d : visible) {
+            String key = d.storageId().asString();
+            if (expandedStorages.add(key) && !snapshotsByStorage.containsKey(key)) {
+                requestStorageSnapshot(d.storageId());
+            }
+        }
+        persistExpandedStorages();
+    }
+
+    /** [CHANGED] 会话 #21-G：把当前展开/收起状态写回客户端配置（重进交易所恢复，
+     *  与范围档位 setStorageRadius 的 set()+save() 一致）。展开/收起切换后调用。 */
+    private void persistExpandedStorages() {
+        PokeTradeConfig.setExpandedStorages(expandedStorages);
+    }
+
+    /** [CHANGED] 会话 #21-F Bug 3：一键展开/收起按钮标签（全展开时显示「一键收起」）。 */
+    private String expandCollapseLabel() {
+        List<StorageDescriptor> visible = storage.visibleStorages();
+        if (!visible.isEmpty()) {
+            for (StorageDescriptor d : visible) {
+                if (!expandedStorages.contains(d.storageId().asString())) {
+                    return t("poketrade.exchange.expand.all");
+                }
+            }
+        }
+        return t("poketrade.exchange.collapse.all");
+    }
+
+    /** [CHANGED] 会话 #21-E：循环切换仓储列表排序档。标记档使用放置时间基准的标记表
+     *  （由 onQueryResponse 分配，无需重算），距离/放置时间档由 StorageViewModel 本地重排。 */
+    private void cycleStorageSort() {
+        StorageViewModel.SortMode cur = storage.getSortMode();
+        int idx = -1;
+        for (int i = 0; i < STORAGE_SORT_CYCLE.length; i++) {
+            if (STORAGE_SORT_CYCLE[i] == cur) {
+                idx = i;
+                break;
+            }
+        }
+        storage.setSortMode(STORAGE_SORT_CYCLE[(idx + 1) % STORAGE_SORT_CYCLE.length]);
+    }
+
+    /** [CHANGED] 会话 #21-E：当前排序档的按钮标签。
+     *  [NEW] 会话 #21-H 修订：物品总价值正/倒序档。 */
+    private String sortModeLabel() {
+        return switch (storage.getSortMode()) {
+            case CREATED_ASC -> t("poketrade.exchange.sort.created.asc");
+            case CREATED_DESC -> t("poketrade.exchange.sort.created.desc");
+            case MARKER_ASC -> t("poketrade.exchange.sort.marker.asc");
+            case MARKER_DESC -> t("poketrade.exchange.sort.marker.desc");
+            case VALUE_ASC -> t("poketrade.exchange.sort.value.asc");
+            case VALUE_DESC -> t("poketrade.exchange.sort.value.desc");
+            default -> t("poketrade.exchange.sort.distance");
+        };
+    }
+
+    /** [CHANGED] 会话 #21-E：当前排序档的 tooltip 说明。
+     *  [NEW] 会话 #21-H 修订：物品总价值正/倒序档。 */
+    private String sortModeTip() {
+        return switch (storage.getSortMode()) {
+            case CREATED_ASC -> t("poketrade.exchange.sort.tip.created.asc");
+            case CREATED_DESC -> t("poketrade.exchange.sort.tip.created.desc");
+            case MARKER_ASC -> t("poketrade.exchange.sort.tip.marker.asc");
+            case MARKER_DESC -> t("poketrade.exchange.sort.tip.marker.desc");
+            case VALUE_ASC -> t("poketrade.exchange.sort.tip.value.asc");
+            case VALUE_DESC -> t("poketrade.exchange.sort.tip.value.desc");
+            default -> t("poketrade.exchange.sort.tip.distance");
+        };
     }
 
     @Override
@@ -867,6 +1190,9 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         storage.setStorages(response.storages());
         storage.setPermissionsByStorage(response.permissions());
         storage.setScanComplete(response.storages().stream().allMatch(StorageDescriptor::scanComplete));
+        // [CHANGED] 会话 #21-E：以放置时间升序为基准重新分配同类型序号标记（末影箱排除）。
+        // 基准固定，标记在任意排序模式下稳定，玩家可凭标记号跨排序辨认同一箱子。
+        storage.recomputeMarkers(StorageViewModel.byCreatedAsc(response.storages()));
         // 清理已消失仓储的快照/展开/滚动状态
         java.util.Set<String> ids = new java.util.LinkedHashSet<>();
         for (StorageDescriptor d : response.storages()) {
@@ -875,20 +1201,33 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         snapshotsByStorage.keySet().retainAll(ids);
         revisionsByStorage.keySet().retainAll(ids);
         expandedStorages.retainAll(ids);
-        storageScrolls.keySet().retainAll(ids);
         List<StorageDescriptor> visible = storage.visibleStorages();
         if (!visible.isEmpty()) {
             StorageId selected = storage.getSelectedStorageId();
             if (selected == null || !ids.contains(selected.asString())) {
                 selectStorage(visible.get(0));
             }
-            // [CHANGED] 会话 #11：首次查询门——只有首个回包且当前全收起时才自动展开首个仓储。
+            // [CHANGED] 会话 #11：首次查询门——只有首个回包且当前全收起时才自动展开。
             // 之前用 expandedStorages.isEmpty() 直接判断，玩家收起全部仓储后集合为空，
             // 10 秒自动刷新回包会把它误判为「首次打开」而强制展开（问题 1）。
+            // [CHANGED] 会话 #21-F Bug 4：默认展开<b>全部</b>可见箱子（而非仅首个），
+            // 满足「仓储列表默认打开」；快照由下方循环对无快照者逐一拉取。
             if (firstQueryGate.onQuery(!visible.isEmpty(), expandedStorages.isEmpty())) {
-                expandedStorages.add(visible.get(0).storageId().asString());
-                requestStorageSnapshot(visible.get(0).storageId());
+                if (savedExpandedStorages.isEmpty()) {
+                    // 首次使用（从未保存过展开状态）：默认全部展开，随后以本次选择为基线写回。
+                    for (StorageDescriptor d : visible) {
+                        expandedStorages.add(d.storageId().asString());
+                    }
+                } else {
+                    // [CHANGED] 会话 #21-G：继承上次保存的展开/收起状态（只对仍可见的箱子生效）。
+                    for (StorageDescriptor d : visible) {
+                        if (savedExpandedStorages.contains(d.storageId().asString())) {
+                            expandedStorages.add(d.storageId().asString());
+                        }
+                    }
+                }
                 accordionScroll = 0; // 仅首次回包重置手风琴滚动到顶
+                persistExpandedStorages();
             } else {
                 // [CHANGED] 会话 #11：后续回包（自动刷新/手动刷新/换半径）保留手风琴滚动位置，
                 // 只钳制到有效范围，不再无条件清零导致列表每 10 秒弹回顶部。
@@ -916,6 +1255,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 response.storageId(), response.revision(), slots);
         String key = response.storageId().asString();
         snapshotsByStorage.put(key, snapshot);
+        // [NEW] 会话 #21-H 修订：快照更新后重算全部箱子价值并注入排序模型
+        refreshStorageValues();
         revisionsByStorage.put(key, response.revision());
         StorageId selectedId = storage.getSelectedStorageId();
         if (selectedId != null && key.equals(selectedId.asString())) {
@@ -935,7 +1276,29 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     storage.getSelectedSnapshot(),
                     response.revision());
             menu.markSnapshotStale(false);
+            // [CHANGED] 会话 #21-F Bug 1：快照已套用（指纹/版本最新）→ 重放挂起的槽位操作
+            replayPendingSlotAction(response.storageId());
         }
+    }
+
+    /**
+     * [NEW] 会话 #21-H 修订：以现有快照 + 全量出售价表重算每个仓储的物品总价值并注入
+     * StorageViewModel，供 VALUE_ASC/VALUE_DESC 排序使用。
+     * 价值 = Σ 槽位物品数量 × 该物品出售单价（无价/未知物品按 0）。
+     */
+    private void refreshStorageValues() {
+        Map<String, Long> values = new java.util.HashMap<>();
+        for (Map.Entry<String, StorageSnapshot> e : snapshotsByStorage.entrySet()) {
+            long total = 0L;
+            for (StorageItemSlot slot : e.getValue().slots().values()) {
+                Long unit = sellPriceMap.get(slot.itemId());
+                if (unit != null && unit > 0L) {
+                    total += (long) slot.count() * unit;
+                }
+            }
+            values.put(e.getKey(), total);
+        }
+        storage.setValueByStorage(values);
     }
 
     @Override
@@ -944,6 +1307,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     }
 
     private void selectStorage(StorageDescriptor descriptor) {
+        // [CHANGED] 会话 #21-F Bug 1：选中变化即取消挂起的槽位操作（用户已改主意）。
+        pendingSlotAction = null;
         storage.selectStorage(descriptor.storageId(), descriptor);
         StorageSnapshot snap = snapshotsByStorage.get(descriptor.storageId().asString());
         menu.setBrowsedStorage(descriptor.storageId(), descriptor, snap,
@@ -966,6 +1331,26 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         PacketDistributor.sendToServer(new StorageSnapshotPacket(sessionId, id));
     }
 
+    /**
+     * [CHANGED] 会话 #21-E：刷新选中箱 + 全部展开箱快照。此前仅刷新选中箱，
+     * 非选中展开箱（含末影箱）快照永不更新 → 出售/存入后残留旧物品（末影箱刷新不及时）。
+     * 服务端按 storageId 逐箱读取最新槽位；仅对展开箱发送，数量有限开销可控。
+     */
+    private void refreshExpandedSnapshots() {
+        StorageId selected = storage.getSelectedStorageId();
+        java.util.Set<String> sent = new java.util.LinkedHashSet<>();
+        if (selected != null) {
+            PacketDistributor.sendToServer(new StorageSnapshotPacket(sessionId, selected));
+            sent.add(selected.asString());
+        }
+        for (StorageDescriptor d : storage.visibleStorages()) {
+            String key = d.storageId().asString();
+            if (expandedStorages.contains(key) && sent.add(key)) {
+                PacketDistributor.sendToServer(new StorageSnapshotPacket(sessionId, d.storageId()));
+            }
+        }
+    }
+
     /** 按 id 选中仓储（手风琴点击时使用；有缓存快照直接套用）。 */
     private void selectStorageById(StorageId id) {
         for (StorageDescriptor d : storage.visibleStorages()) {
@@ -976,17 +1361,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         }
     }
 
-    /** 分类循环：全部 → 目录分类依次 → 全部。 */
-    private void cycleSlotCategory() {
-        if (categories.isEmpty()) {
-            slotCategoryIndex = -1;
-            return;
-        }
-        slotCategoryIndex++;
-        if (slotCategoryIndex >= categories.size()) {
-            slotCategoryIndex = -1;
-        }
-    }
+    // [REMOVED] 会话 #21-H 修订：cycleSlotCategory 循环切换被分类选择弹窗取代（点击 slotCategory
+    // 现在打开弹窗直接选中，无需逐次循环）。
 
     /**
      * C6：构建仓储出售预览——来源=仓储、仓储名称/ID、SELL 权限、revision；
@@ -1026,6 +1402,46 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         }
     }
 
+    /**
+     * [CHANGED] 会话 #21-E：构建预览物品逐条来源表（itemId → 可读箱名列表，含标记号，
+     * 去重保持首次出现顺序）。由 {@code sellQueue}（含 storageId）派生，渲染时按需构建，
+     * 免去预览清空路径的字段同步。跨箱子待售（末影箱+箱子）时精确标注每个物品来源。
+     */
+    private Map<String, List<String>> buildPreviewItemSources() {
+        Map<String, java.util.Set<String>> byItem = new LinkedHashMap<>();
+        for (PendingSell sell : sellQueue.values()) {
+            byItem.computeIfAbsent(sell.itemId(), k -> new LinkedHashSet<>())
+                    .add(storageDisplayName(sell.storageId()));
+        }
+        Map<String, List<String>> out = new LinkedHashMap<>();
+        for (Map.Entry<String, java.util.Set<String>> e : byItem.entrySet()) {
+            out.put(e.getKey(), List.copyOf(e.getValue()));
+        }
+        return out;
+    }
+
+    /**
+     * [CHANGED] 会话 #21-E：仓储可读名（显示名 + 同类型标记号，如 "Dev的箱子①"）。
+     * 用于预览来源行/逐条 tooltip/列表标记，替代原始 storageId 键值。
+     */
+    private String storageDisplayName(StorageId id) {
+        if (id == null) {
+            return "";
+        }
+        for (StorageDescriptor d : storage.visibleStorages()) {
+            if (d.storageId().equals(id)) {
+                return displayNameWithMarker(d);
+            }
+        }
+        return id.adapterType();
+    }
+
+    /** [CHANGED] 会话 #21-E：仓储显示名 + 同类型序号标记（末影箱无标记号，保持原名）。 */
+    private String displayNameWithMarker(StorageDescriptor d) {
+        Integer m = storage.getMarkers().get(d.storageId().asString());
+        return d.displayName() + (m == null ? "" : StorageViewModel.markerLabel(m));
+    }
+
     private void sendStorageSell() {
         StorageId selected = storage.getSelectedStorageId();
         if (selected == null || storagePreview == null || !storagePreview.canConfirm()
@@ -1034,13 +1450,17 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         }
         List<ExchangeService.SellEntry> entries = new ArrayList<>();
         Map<StorageId, Long> revisions = new LinkedHashMap<>();
+        // [CHANGED] 会话 #19：逐箱携带 storageId + 各自 revision（一键出售所有展开箱子）。
         for (PendingSell sell : sellQueue.values()) {
             entries.add(new ExchangeService.SellEntry(
-                    selected, sell.slotIndex(), sell.count(), sell.fingerprint()));
-            revisions.put(selected, storage.getSelectedSnapshotRevision());
+                    sell.storageId(), sell.slotIndex(), sell.count(), sell.fingerprint()));
+            revisions.put(sell.storageId(), revisionsByStorage.getOrDefault(
+                    sell.storageId().asString(), -1L));
         }
         PacketDistributor.sendToServer(new StorageSellPacket(
                 sessionId, UUID.randomUUID().toString(), entries, revisions));
+        // [NEW] 会话 #21-H 修订：学习模式卖完刷新目录（新卖过物品立即可买回）
+        refreshCatalogIfLearning();
     }
 
     // ================= 交互 =================
@@ -1062,6 +1482,54 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             }
             return true;
         }
+        // [CHANGED] 会话 #21-C：一键出售模式选择弹窗（模态，z=400）。点击选项即按该模式
+        // 出售并写回配置；点「不再提示」勾选；点面板外关闭。打开时吃掉一切点击。
+        if (showSellWholePopup) {
+            if (button == 0 && layout.sellWholeAll().contains(localX, localY)) {
+                showSellWholePopup = false;
+                PokeTradeConfig.setSellWholeMode(PokeTradeConfig.SellWholeMode.ALL);
+                if (sellWholeDontAsk) {
+                    PokeTradeConfig.setSellWholeConfirm(false);
+                }
+                runSellWhole(PokeTradeConfig.SellWholeMode.ALL);
+            } else if (button == 0 && layout.sellWholeExpanded().contains(localX, localY)) {
+                showSellWholePopup = false;
+                PokeTradeConfig.setSellWholeMode(PokeTradeConfig.SellWholeMode.EXPANDED);
+                if (sellWholeDontAsk) {
+                    PokeTradeConfig.setSellWholeConfirm(false);
+                }
+                runSellWhole(PokeTradeConfig.SellWholeMode.EXPANDED);
+            } else if (button == 0 && layout.sellWholeDontAsk().contains(localX, localY)) {
+                sellWholeDontAsk = !sellWholeDontAsk;
+            } else if (button == 0 && !layout.sellWholeModal().contains(localX, localY)) {
+                // 面板外点击 → 关闭（不执行）
+                showSellWholePopup = false;
+            }
+            return true;
+        }
+        // [NEW] 会话 #21-H 修订：仓储分类选择弹窗（模态，z=400）。点击可视区内分类行即选中并
+        // 关闭；点面板外关闭。打开时吃掉一切点击，避免误触下层按钮。
+        if (showCategoryModal) {
+            if (button == 0) {
+                ExchangeUiModel.Rect modal = layout.categoryModal();
+                int rowY = modal.y() + 16;
+                int row = (localY - rowY) / CATEGORY_ROW_H;
+                if (localX >= modal.x() && localX <= modal.right()
+                        && localY >= rowY && localY < rowY + CATEGORY_VISIBLE_ROWS * CATEGORY_ROW_H
+                        && row >= 0) {
+                    int target = categoryScroll + row;
+                    if (target == 0) {
+                        slotCategoryIndex = -1; // 「全部」
+                    } else if (target - 1 < categories.size()) {
+                        slotCategoryIndex = target - 1;
+                    }
+                    showCategoryModal = false;
+                } else if (!modal.contains(localX, localY)) {
+                    showCategoryModal = false;
+                }
+            }
+            return true;
+        }
         if (searchBox != null && layout.search().contains(localX, localY)) {
             // 显式命中 + 聚焦：不依赖 EditBox 内部命中判定，保证缩放后点击必定生效
             searchBox.setFocused(true);
@@ -1073,9 +1541,36 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             storageSearchBox.onClick(localX, localY);
             return true;
         }
+        // [CHANGED] 会话 #21-B：操作说明按钮（左栏范围输入框上方、与展开按钮同 Y）点击切换
+        // [CHANGED] 会话 #21-C：开帮助面板时顺带关闭一键出售弹窗（两模态互斥）
+        if (button == 0 && !leftCollapsed && layout.helpButton().contains(localX, localY)) {
+            showHelp = !showHelp;
+            showSellWholePopup = false;
+            return true;
+        }
+        // 帮助面板打开时点击面板外 → 关闭（吃掉点击，避免误触下层按钮）
+        if (showHelp && button == 0 && !layout.helpModal().contains(localX, localY)) {
+            showHelp = false;
+            return true;
+        }
         // [CHANGED] 仓储扫描范围：点击切换档位（翻倍，最大 648 后重置 16）
         if (button == 0 && layout.radiusInput().contains(localX, localY)) {
             cycleStorageRadius();
+            return true;
+        }
+        // [CHANGED] 会话 #16 组 4（任务 C）：一键出售(整箱全部) —— 无待售确认进行中才可点击
+        // [CHANGED] 会话 #21-C：点击弹出模式选择弹窗（全部/展开）。配置「不再提示」
+        // （sellWholeConfirm=false）时跳过弹窗，直接按默认模式执行。
+        if (button == 0 && !workflow.pending()
+                && layout.sellWhole().contains(localX, localY)) {
+            if (PokeTradeConfig.sellWholeConfirm()) {
+                showSellWholePopup = true;
+                showHelp = false; // 两模态互斥
+                sellWholeMode = PokeTradeConfig.sellWholeMode();
+                sellWholeDontAsk = false;
+            } else {
+                runSellWhole(PokeTradeConfig.sellWholeMode());
+            }
             return true;
         }
         if (quantityBox != null && !rightCollapsed
@@ -1220,18 +1715,58 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             dragFromPlayerSlot = -1;
         }
         if (button == 0 && !carried.isEmpty() && !leftCollapsed) {
+            // [CHANGED] 会话 #15-B：拿起后 200ms 内的同一手势松开不回存——
+            // 否则 LAN/单机同 tick 回包 setCarried 后，mouseReleased 会把刚拿起的物品又存回去。
+            // [FIXED] 会话 #15-C：判定收敛到 ExchangeUiModel.immediateRedepositSuppressed，
+            // 修掉 Long.MIN_VALUE 哨兵下溢导致的「拖入仓储格子全部无效」。
+            if (ExchangeUiModel.immediateRedepositSuppressed(
+                    pendingPickupAt, System.currentTimeMillis())) {
+                return true;
+            }
+            // [CHANGED] Bug 2：存入模型改为「指定格子 + 组合键」——
+            // 左键拖到格=整叠存该格（空格/同类可合并）；Shift=只存 1 个；Ctrl=自动找槽（旧行为兜底）；
+            // 异类格/表头/空白拒绝并提示，不再静默自动排列。
             AccordionEntry entry = accordionEntryAt(lx, ly);
-            if (entry != null) {
-                // 具体格子：仅当该格为空或可合并同物品时按格精确存入；
-                // 空格子（无 StorageItemSlot）/不同物品格/表头一律走服务端自动找槽位，
-                // 否则空格无法触发存入，出现“只能取、不能放”的现象
-                StorageItemSlot target = entry.grid() != null ? accordionSlotAt(entry, lx, ly) : null;
-                if (target != null && canDepositInto(target, carried)) {
-                    depositCarriedTo(entry.descriptor().storageId(), target.slotIndex(), null);
+            StorageId dropStorage = entry != null ? entry.descriptor().storageId() : null;
+            if (entry != null && entry.grid() != null && entry.grid().contains(lx, ly)) {
+                if (hasControlDown()) {
+                    depositCarriedTo(dropStorage, -1, entry.descriptor().displayName(),
+                            carried.getCount());
                     return true;
                 }
-                depositCarriedTo(entry.descriptor().storageId(), -1,
-                        entry.descriptor().displayName());
+                int gi = accordionSlotIndexAt(entry, lx, ly);
+                if (gi < 0 || gi >= entry.descriptor().slotCount()) {
+                    sellMessage = t("poketrade.exchange.deposit.occupied");
+                    sellMessageColor = PeStyle.TEXT_ERROR;
+                    return true;
+                }
+                StorageItemSlot target = snapshotsByStorage.get(dropStorage.asString()) == null
+                        ? null
+                        : snapshotsByStorage.get(dropStorage.asString()).slots().get(gi);
+                if (target != null && !canDepositInto(target, carried)) {
+                    sellMessage = t("poketrade.exchange.deposit.occupied");
+                    sellMessageColor = PeStyle.TEXT_ERROR;
+                    return true;
+                }
+                depositCarriedTo(dropStorage, gi, null,
+                        hasShiftDown() ? 1 : carried.getCount());
+                return true;
+            }
+            if (entry != null) {
+                // 落在表头（名称/箭头区）：Ctrl 自动找槽，否则提示拖到具体格子
+                if (hasControlDown()) {
+                    depositCarriedTo(dropStorage, -1, entry.descriptor().displayName(),
+                            carried.getCount());
+                    return true;
+                }
+                sellMessage = t("poketrade.exchange.deposit.hint");
+                sellMessageColor = PeStyle.TEXT_WARN;
+                return true;
+            }
+            // 落在左栏列表空白处（非条目）：提示拖到具体格子，避免静默回存背包
+            if (layout.left().contains(lx, ly)) {
+                sellMessage = t("poketrade.exchange.deposit.hint");
+                sellMessageColor = PeStyle.TEXT_WARN;
                 return true;
             }
         }
@@ -1244,18 +1779,20 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (targetId == null || targetId.isEmpty()) {
             return true;
         }
-        ResourceLocation carriedId = BuiltInRegistries.ITEM.getKey(carried.getItem());
+        // [CHANGED] 会话 #19：携带栈球类按 encode 球种匹配仓储槽位 itemId（同为 encode 键），
+        // 大师球可并入大师球槽位而非被注册表键 pixelmon:poke_ball 误判为普通球不匹配。
+        String carriedId = PokeballIdentity.encode(carried);
         if (carriedId == null) {
             return false;
         }
-        if (!targetId.equals(carriedId.toString())) {
+        if (!targetId.equals(carriedId)) {
             return false;
         }
         return target.count() + carried.getCount() <= carried.getMaxStackSize();
     }
 
-    /** 把鼠标上的物品存入指定仓储（slotIndex=-1 表示服务端自动找槽位）。 */
-    private void depositCarriedTo(StorageId storageId, int targetSlot, String transferName) {
+    /** 把鼠标上的物品存入指定仓储（slotIndex=-1 表示服务端自动找槽位；count 为本次存入数量）。 */
+    private void depositCarriedTo(StorageId storageId, int targetSlot, String transferName, int count) {
         if (!storage.allowsOn(storageId, StoragePermission.DEPOSIT)) {
             sellMessage = t("poketrade.exchange.deposit.denied");
             sellMessageColor = PeStyle.TEXT_ERROR;
@@ -1268,7 +1805,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         sellMessageColor = PeStyle.TEXT_DIM;
         PacketDistributor.sendToServer(new StorageDepositCarriedPacket(
                 sessionId, UUID.randomUUID().toString(), storageId, targetSlot,
-                -1L, menu.getCarried().getCount()));
+                -1L, Math.max(1, Math.min(count, menu.getCarried().getCount()))));
     }
 
     @Override
@@ -1313,11 +1850,12 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             selectedCart = -1;
             return true;
         }
-        // 购物车批量出售：待售队列非空则结算仓储待售，否则预览背包出售
+        // [CHANGED] 会话 #21-D：购物车「批量出售」只预览/出售玩家背包物品（语义固定），
+        // 不再因待售队列残留而误结算仓储待售——此前 cartSell 检查 sellQueue 非空即
+        // submitStorageSell，而 cancelPreview 不清 sellQueue：一键出售取消后残留仓储待售，
+        // 再点批量出售会误把仓储物品也卖出去（玩家反馈的特定条件 bug，见会话 #21-D）。
         if (layout.cartSell().contains(x, y) && !workflow.pending()) {
-            if (!sellQueue.isEmpty()) {
-                submitStorageSell();
-            } else if (sellEnabled) {
+            if (sellEnabled) {
                 sellInventory();
             }
             return true;
@@ -1358,9 +1896,14 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             quantityBox.setFocused(false);
             return true;
         }
-        // 左栏：物品分类循环（全部 / 目录分类）
+        // [CHANGED] 会话 #21-H 修订：左栏：物品分类按钮 → 弹出分类选择弹窗（原循环切换；
+        // 弹窗列出「全部」+ 各分类，补齐 lang 键后显示中文，点击直接选中）。
         if (!leftCollapsed && layout.slotCategory().contains(x, y)) {
-            cycleSlotCategory();
+            // 打开时滚动定位到当前选中行（第 0 行 = 「全部」），使当前筛选立即可见
+            int totalRows = categories.size() + 1;
+            categoryScroll = Math.max(0, Math.min(slotCategoryIndex + 1,
+                    Math.max(0, totalRows - CATEGORY_VISIBLE_ROWS)));
+            showCategoryModal = true;
             return true;
         }
         if (!leftCollapsed && layout.filterSell().contains(x, y)) {
@@ -1386,16 +1929,19 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             applyLayout();
             return true;
         }
-        if (!leftCollapsed && layout.storageClear().contains(x, y) && !sellQueue.isEmpty()) {
-            sellQueue.clear();
-            sellPreview = null;
-            storagePreview = null;
-            previewConfirmed = false;
-            sellMessage = "";
+        // [CHANGED] 会话 #21-F Bug 3：原「清空待售」按钮改为一键展开/一键收起。
+        // 清空待售能力由预览取消路径（cancelPreview）保留，按钮让位给列表折叠导航。
+        if (!leftCollapsed && layout.storageClear().contains(x, y)) {
+            toggleAllExpanded();
             return true;
         }
         if (!leftCollapsed && layout.storageDeposit().contains(x, y) && !workflow.pending()) {
             depositAllToStorage();
+            return true;
+        }
+        // [CHANGED] 会话 #21-E：排序按钮 —— 循环切换仓储列表排序档
+        if (!leftCollapsed && layout.storageSort().contains(x, y)) {
+            cycleStorageSort();
             return true;
         }
         return false;
@@ -1470,10 +2016,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (!sessionId.equals(response.sessionId())) {
             return;
         }
-        StorageId selected = storage.getSelectedStorageId();
-        if (selected != null) {
-            PacketDistributor.sendToServer(new StorageSnapshotPacket(sessionId, selected));
-        }
+        // [CHANGED] 会话 #21-E：刷新选中箱 + 全部展开箱快照（此前仅选中箱）
+        refreshExpandedSnapshots();
         // 自动溢流存入：处理完本箱后继续发下一个（装满则溢出），直到队列清空
         if (depositOverflowInFlight) {
             if (!depositOverflowQueue.isEmpty()) {
@@ -1499,7 +2043,13 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     response.movedLines(), response.totalLines());
             sellMessageColor = PeStyle.TEXT_OK;
         } else {
-            sellMessage = t("poketrade.exchange.deposit.failed");
+            // [CHANGED] 会话 #21-F Bug 1：target_blocked → 明确「该格已有其他物品」，
+            // 不再一律笼统的「存入失败」；并记录 code 便于诊断
+            PokeEMC.LOGGER.warn("[storage-diag] client deposit failed code={} msg={}",
+                    response.code(), response.message());
+            sellMessage = t("target_blocked".equals(response.code())
+                    ? "poketrade.exchange.deposit.failed.blocked"
+                    : "poketrade.exchange.deposit.failed");
             sellMessageColor = PeStyle.TEXT_ERROR;
         }
     }
@@ -1513,6 +2063,22 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
 
     /** 左栏内部点击：仓储表头展开/收起 + 槽位（左键拿起、右键菜单、Shift 取出）。 */
     private void handleLeftClick(int x, int y, int button) {
+        // [CHANGED] 会话 #15-A：整体滚动条点击（列表右缘外的列间隙 141..143，
+        // 不落在任何条目上，必须在 accordionEntryAt 之前判定）。按相对 y 换算 target。
+        int accordionSbX = layout.left().right() + 1;
+        if (x >= accordionSbX && x <= accordionSbX + 2
+                && y >= layout.listTop() && y < ACCORDION_BOTTOM_LIMIT) {
+            int total = storage.visibleStorages().size();
+            int visible = accordionEntries().size();
+            int maxOffset = Math.max(0, total - visible);
+            if (maxOffset > 0) {
+                int relY = y - layout.listTop();
+                int trackH = ACCORDION_BOTTOM_LIMIT - layout.listTop();
+                int target = Math.round((float) relY / trackH * maxOffset);
+                accordionScroll = Math.max(0, Math.min(target, maxOffset));
+                return;
+            }
+        }
         AccordionEntry entry = accordionEntryAt(x, y);
         if (entry == null) {
             return;
@@ -1530,34 +2096,33 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     requestStorageSnapshot(id);
                 }
             }
+            persistExpandedStorages();
             return;
         }
-        // 网格滚动条点击：按 y 位置跳页（Bug #1：双箱超限行数时唯一明确的翻页手段）
-        if (entry.grid() != null) {
-            int sbX = entry.grid().right() + 1;
-            if (x >= sbX && x <= sbX + 2 && y >= entry.grid().y() && y < entry.grid().bottom()) {
-                String key = id.asString();
-                // [CHANGED] 会话 #11：滚动范围按容器容量（未裁剪行数），否则双箱 8 行→可见 7 行时
-                // maxOffset=0，滚动条永远点不动，第 8 排不可达（问题 2）。
-                int totalRows = ExchangeUiModel.accordionContentRows(
-                        entry.descriptor().slotCount(), snapshotCols);
-                int visibleRows = Math.max(1, entry.grid().height() / SLOT);
-                int maxOffset = Math.max(0, totalRows - visibleRows);
-                if (maxOffset > 0) {
-                    int relY = y - entry.grid().y();
-                    int target = Math.round((float) relY / entry.grid().height() * maxOffset);
-                    storageScrolls.put(key, Math.max(0, Math.min(target, maxOffset)));
-                    return;
-                }
-            }
-        }
+        // [REMOVED] 会话 #21-F Bug 2：移除每格小滑条（原双箱第 8 排滚动点击跳页）。
+        // 展开箱现显示全部行，由手风琴大滑条导航，无需每格滚动条。
         // 网格槽位：先确保该仓储被选中，再执行操作
         StorageId selected = storage.getSelectedStorageId();
-        if (selected == null || !selected.equals(id)) {
+        boolean justSelected = selected == null || !selected.equals(id);
+        if (justSelected) {
             selectStorageById(id);
         }
         StorageItemSlot slot = accordionSlotAt(entry, x, y);
         if (slot == null) {
+            return;
+        }
+        // [CHANGED] 会话 #21-F Bug 1：刚选中该箱时缓存快照可能过期（指纹/版本与服务端
+        // 不符，直接发操作会被拒），把基于指纹的操作挂起，等 onSnapshotResponse 用新
+        // 快照重放（replayPendingSlotAction）。拖放存入不校验指纹，松开时直接用当前格。
+        if (justSelected) {
+            if (!menu.getCarried().isEmpty()) {
+                return; // 松开时执行存入（deposit 不依赖缓存指纹）
+            }
+            PendingSlotOp op = storageWithdrawShift() ? PendingSlotOp.WITHDRAW
+                    : (button == 1 ? PendingSlotOp.CONTEXT_MENU : PendingSlotOp.PICKUP);
+            pendingSlotAction = new PendingSlotAction(id, slot.slotIndex(), op, x, y);
+            sellMessage = t("poketrade.exchange.sell.storage.loading");
+            sellMessageColor = PeStyle.TEXT_DIM;
             return;
         }
         // [CHANGED] 会话 #10：仓储取出用「非贩卖键」的 Shift（默认右 Shift），与背包 Shift 贩卖隔离。
@@ -1575,19 +2140,47 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         pickUpFromStorage(slot);
     }
 
+    /**
+     * [CHANGED] 会话 #21-F Bug 1：新快照到达后重放挂起的槽位操作。此时选中箱就是该箱，
+     * 快照已套用（指纹/版本最新），用新数据执行，不再被服务端以「状态已变化」拒绝。
+     */
+    private void replayPendingSlotAction(StorageId storageId) {
+        PendingSlotAction pending = pendingSlotAction;
+        if (pending == null || !pending.storageId.equals(storageId)) {
+            return;
+        }
+        pendingSlotAction = null;
+        StorageSnapshot snap = snapshotsByStorage.get(storageId.asString());
+        if (snap == null) {
+            return;
+        }
+        StorageItemSlot slot = snap.slots().get(pending.slotIndex);
+        if (slot == null || !matchesItemFilter(slot)) {
+            sellMessage = t("poketrade.exchange.withdraw.failed.empty");
+            sellMessageColor = PeStyle.TEXT_ERROR;
+            return;
+        }
+        switch (pending.op) {
+            case PICKUP -> pickUpFromStorage(slot);
+            case WITHDRAW -> withdrawFromStorage(slot);
+            case CONTEXT_MENU -> contextMenu = new ContextMenu(pending.x, pending.y, slot, storageId);
+        }
+    }
+
+    // [CHANGED] 会话 #21-F Bug 2：移除 gridScroll——展开箱显示全部行，无每格滚动。
     private record AccordionEntry(StorageDescriptor descriptor, ExchangeUiModel.Rect header,
-                                  ExchangeUiModel.Rect grid, int gridScroll) {
+                                  ExchangeUiModel.Rect grid) {
         boolean expanded() {
             return grid != null;
         }
     }
 
-    /** 手风琴条目几何（按滚动偏移跳过前面的仓储）。 */
+    /** 手风琴条目几何（按滚动偏移跳过前面的仓储；展开网格按剩余高度裁剪）。 */
     private List<AccordionEntry> accordionEntries() {
         List<AccordionEntry> out = new ArrayList<>();
         List<StorageDescriptor> visible = storage.visibleStorages();
         int y = layout.listTop();
-        int bottomLimit = 226;
+        int bottomLimit = ACCORDION_BOTTOM_LIMIT;
         int start = Math.max(0, accordionScroll);
         for (int i = start; i < visible.size() && y < bottomLimit; i++) {
             StorageDescriptor d = visible.get(i);
@@ -1595,25 +2188,28 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             ExchangeUiModel.Rect header = new ExchangeUiModel.Rect(
                     layout.left().x(), y, layout.left().width(), headerH);
             ExchangeUiModel.Rect grid = null;
-            int scroll = 0;
-            if (expandedStorages.contains(d.storageId().asString())) {
-                // [CHANGED] 会话 #11：网格高度按容器容量 slotCount 计算（单箱 4 行、双箱 7 可见行）。
+            if (expandedStorages.contains(d.storageId().asString())
+                    && y + headerH < bottomLimit) {
+                // [CHANGED] 会话 #11：网格高度按容器容量 slotCount 计算（单箱 4 行、双箱 8 行）。
                 // 之前按快照「已占用槽数」算，空/半空箱子只显示 1 行（问题 2）。
-                int rows = accordionGridRows(d);
-                scroll = storageScrolls.getOrDefault(d.storageId().asString(), 0);
+                // [CHANGED] 会话 #21-F Bug 2：移除每格小滑条后网格高度=容器全部行
+                // （按剩余可用高度裁剪），隐藏行由手风琴大滑条滚动访问（不再嵌套滚动）。
+                int maxRows = Math.max(1, (bottomLimit - (y + headerH)) / SLOT);
+                int rows = Math.min(accordionGridRows(d), maxRows);
                 grid = new ExchangeUiModel.Rect(layout.left().x() + 2, y + headerH,
                         snapshotCols * SLOT, rows * SLOT);
             }
-            out.add(new AccordionEntry(d, header, grid, scroll));
+            out.add(new AccordionEntry(d, header, grid));
             y += headerH + (grid == null ? 0 : grid.height());
         }
         return out;
     }
 
     /** 展开网格可见行数：按容器容量 slotCount 计算并裁剪到面板高度上限（问题 2 修复）。 */
+    // [CHANGED] 会话 #21-F Bug 2：移除每格小滑条——网格高度=容器全部行（单箱 4、双箱 8），
+    // 不再裁剪到 MAX_ACCORDION_ROWS；越界行由手风琴大滑条滚动访问。
     private int accordionGridRows(StorageDescriptor d) {
-        return ExchangeUiModel.accordionVisibleRows(
-                d.slotCount(), snapshotCols, MAX_ACCORDION_ROWS);
+        return ExchangeUiModel.accordionContentRows(d.slotCount(), snapshotCols);
     }
 
     private AccordionEntry accordionEntryAt(int x, int y) {
@@ -1626,21 +2222,34 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         return null;
     }
 
-    /** 展开网格点击位置对应的槽位（含滚动偏移与物品过滤）。 */
+    /** 展开网格点击位置对应的槽位（含滚动偏移与物品过滤；空格返回 null）。 */
     private StorageItemSlot accordionSlotAt(AccordionEntry entry, int x, int y) {
-        if (entry.grid() == null || !entry.grid().contains(x, y)) {
+        int gi = accordionSlotIndexAt(entry, x, y);
+        if (gi < 0) {
             return null;
+        }
+        StorageSnapshot snap = snapshotsByStorage.get(entry.descriptor().storageId().asString());
+        if (snap == null) {
+            return null;
+        }
+        StorageItemSlot slot = snap.slots().get(gi);
+        // [CHANGED] Bug 2：网格按存储槽号寻址。保留过滤语义：被搜索/分类过滤掉的槽位
+        // 画成空、也不可点击（与旧的压缩列表行为一致）。
+        return slot != null && matchesItemFilter(slot) ? slot : null;
+    }
+
+    /** [CHANGED] 会话 #21-F Bug 2：移除每格滚动后网格=存储槽号直接寻址（无 scroll 偏移）。 */
+    private int accordionSlotIndexAt(AccordionEntry entry, int x, int y) {
+        if (entry.grid() == null || !entry.grid().contains(x, y)) {
+            return -1;
         }
         int col = (x - entry.grid().x()) / SLOT;
         int row = (y - entry.grid().y()) / SLOT;
         int visibleRows = entry.grid().height() / SLOT;
         if (col < 0 || col >= snapshotCols || row < 0 || row >= visibleRows) {
-            return null;
+            return -1;
         }
-        int index = entry.gridScroll() * snapshotCols + row * snapshotCols + col;
-        List<StorageItemSlot> slots = filteredSlots(
-                snapshotsByStorage.get(entry.descriptor().storageId().asString()));
-        return index >= 0 && index < slots.size() ? slots.get(index) : null;
+        return row * snapshotCols + col;
     }
 
     /** 物品搜索 + 分类过滤后的槽位列表。 */
@@ -1692,6 +2301,7 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             return;
         }
         pendingPickup = true;
+        pendingPickupAt = System.currentTimeMillis();
         sellMessage = t("poketrade.exchange.pickup.pending");
         sellMessageColor = PeStyle.TEXT_DIM;
         PacketDistributor.sendToServer(new StorageWithdrawCarriedPacket(
@@ -1767,30 +2377,61 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (!sessionId.equals(response.sessionId())) {
             return;
         }
-        StorageId selected = storage.getSelectedStorageId();
-        if (selected != null) {
-            PacketDistributor.sendToServer(new StorageSnapshotPacket(sessionId, selected));
-        }
+        // [CHANGED] 会话 #21-F Bug 1：任何移动（取出/拿起）后刷新选中箱 + 全部展开箱快照
+        //（此前仅刷新选中箱），防止非选中展开箱缓存快照过期（指纹/版本过期）导致
+        // 下次操作被服务端拒——反馈的「第 3 个箱子无法取出/贩卖/放置」即由此累积。
+        refreshExpandedSnapshots();
         if (pendingPickup) {
             pendingPickup = false;
-            sellMessage = t(response.success()
-                    ? "poketrade.exchange.pickup.done"
-                    : "poketrade.exchange.pickup.failed");
-            sellMessageColor = response.success() ? PeStyle.TEXT_OK : PeStyle.TEXT_ERROR;
+            if (response.success()) {
+                sellMessage = t("poketrade.exchange.pickup.done");
+                sellMessageColor = PeStyle.TEXT_OK;
+            } else {
+                // [CHANGED] 会话 #21-F Bug 1 诊断：客户端记录移动失败 code（与服务端
+                // [storage-diag] 对应，便于核对是哪一环节拒绝）
+                PokeEMC.LOGGER.warn("[storage-diag] client pickup failed code={} msg={}",
+                        response.code(), response.message());
+                sellMessage = t(moveFailureKey("poketrade.exchange.pickup.failed", response.code()));
+                sellMessageColor = PeStyle.TEXT_ERROR;
+            }
             return;
         }
         if (response.success()) {
             sellMessage = t("poketrade.exchange.withdraw.done");
             sellMessageColor = PeStyle.TEXT_OK;
         } else {
-            sellMessage = t("poketrade.exchange.withdraw.failed");
+            PokeEMC.LOGGER.warn("[storage-diag] client withdraw failed code={} msg={}",
+                    response.code(), response.message());
+            sellMessage = t(moveFailureKey("poketrade.exchange.withdraw.failed", response.code()));
             sellMessageColor = PeStyle.TEXT_ERROR;
         }
+    }
+
+    /**
+     * [CHANGED] 会话 #21-F Bug 1：把服务端移动失败 code 映射为具体文案（替代一律
+     * 「状态已变化」）。content_changed/revision_conflict 提示已自动刷新、请重试；
+     * 其余按语义细分，便于玩家与后续排障定位。未知 code 回落 base 键。
+     */
+    private static String moveFailureKey(String base, String code) {
+        return switch (code) {
+            case "content_changed" -> base + ".changed";
+            case "source_empty" -> base + ".empty";
+            case "revision_conflict" -> base + ".revision";
+            case "permission_denied" -> base + ".permission";
+            default -> base;
+        };
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double deltaX, double deltaY) {
         int x = toLocalX(mouseX), y = toLocalY(mouseY);
+        // [NEW] 会话 #21-H 修订：分类弹窗内滚轮滚动列表（含「全部」共 categories+1 项）
+        if (showCategoryModal) {
+            categoryScroll = ExchangeUiModel.clampScroll(
+                    categoryScroll - (int) deltaY,
+                    categories.size() + 1, CATEGORY_VISIBLE_ROWS);
+            return true;
+        }
         // C8d：目录/购物车/列表/快照/预览滚动统一钳制到页边界
         if (sellPreview != null && layout.previewModal().contains(x, y)) {
             int totalLines = sellPreview.lines().size();
@@ -1808,26 +2449,27 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             return true;
         }
         if (!rightCollapsed && layout.cartGrid().contains(x, y)) {
+            // [CHANGED] Bug 6：cartScroll 行式钳制（可见 4 行，≤28 种自动钳到 0 = 不滚动）
             cartScroll = ExchangeUiModel.clampScroll(
                     cartScroll - (int) deltaY,
-                    ExchangeUiModel.pageCount(this.cart.size(), ExchangeUiModel.Layout.CART_CELLS), 1);
+                    ExchangeUiModel.accordionContentRows(this.cart.size(), this.cartCols),
+                    ExchangeUiModel.Layout.CART_ROWS);
             return true;
         }
         if (!leftCollapsed) {
             AccordionEntry over = accordionEntryAt(x, y);
-            if (over != null && over.grid() != null && over.grid().contains(x, y)) {
-                // 展开网格滚动（滚动范围按容器容量，双箱超限时最后几排可滚）
-                String key = over.descriptor().storageId().asString();
-                // [CHANGED] 会话 #11：滚动范围按容器容量（未裁剪行数），问题 2 修复。
-                int totalRows = ExchangeUiModel.accordionContentRows(
-                        over.descriptor().slotCount(), snapshotCols);
-                storageScrolls.put(key, ExchangeUiModel.clampScroll(
-                        over.gridScroll() + (deltaY > 0 ? -1 : 1), totalRows,
-                        over.grid().height() / SLOT));
-                return true;
-            }
+            // [REMOVED] 会话 #21-F Bug 2：移除每格网格滚动（storageScrolls）。
+            // 指针落在任意条目（表头或展开网格）上时统一滚动手风琴整体列表。
             if (over != null) {
                 // 手风琴条目滚动
+                accordionScroll = ExchangeUiModel.clampScroll(
+                        accordionScroll + (deltaY > 0 ? -1 : 1),
+                        storage.visibleStorages().size(), 1);
+                return true;
+            }
+            // [CHANGED] 会话 #15-A：指针落在列表区空白处（不在任何条目/网格上）时也滚动整体列表
+            if (y < ACCORDION_BOTTOM_LIMIT
+                    && x >= layout.left().x() && x <= layout.left().right()) {
                 accordionScroll = ExchangeUiModel.clampScroll(
                         accordionScroll + (deltaY > 0 ? -1 : 1),
                         storage.visibleStorages().size(), 1);
@@ -1858,6 +2500,20 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (keyCode == GLFW.GLFW_KEY_ESCAPE && contextMenu != null) {
             contextMenu = null;
+            return true;
+        }
+        // [CHANGED] 会话 #21-C：ESC 依次关闭一键出售弹窗 / 帮助面板（模态优先）
+        if (keyCode == GLFW.GLFW_KEY_ESCAPE && showSellWholePopup) {
+            showSellWholePopup = false;
+            return true;
+        }
+        // [NEW] 会话 #21-H 修订：ESC 关闭分类选择弹窗
+        if (keyCode == GLFW.GLFW_KEY_ESCAPE && showCategoryModal) {
+            showCategoryModal = false;
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_ESCAPE && showHelp) {
+            showHelp = false;
             return true;
         }
         if (keyCode == GLFW.GLFW_KEY_TAB && searchBox != null) {
@@ -1946,14 +2602,16 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             previewPage = 0;
         } else if (action == ExchangeUiModel.ResultAction.REFRESH_STORAGE) {
             awaitingSnapshotClear = true;
-            StorageId selected = storage.getSelectedStorageId();
-            if (selected != null) {
-                PacketDistributor.sendToServer(new StorageSnapshotPacket(sessionId, selected));
-            }
+            // [CHANGED] 会话 #21-E：出售成功后刷新选中箱 + 全部展开箱快照
+            //（此前仅选中箱，非选中展开箱含末影箱残留旧槽位）。
+            refreshExpandedSnapshots();
         } else if (action == ExchangeUiModel.ResultAction.KEEP_DRAFT) {
             awaitingSnapshotClear = false;
         }
         if (operation == ExchangeUiModel.Operation.STORAGE_SELL && lastResult != TradeResult.SUCCESS) {
+            // [CHANGED] 会话 #21-F Bug 1 诊断：记录仓储出售失败的具体原因
+            PokeEMC.LOGGER.warn("[storage-diag] client storage_sell failed reason={} code={}",
+                    menu.getResultReason(), menu.getResultCode());
             sellMessage = t(storageReasonKey(menu.getResultReason()));
             sellMessageColor = PeStyle.TEXT_ERROR;
         }
@@ -1966,6 +2624,9 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             case CONTENT_CHANGED -> "poketrade.exchange.result.storage_sell.content_changed";
             case UNAVAILABLE -> "poketrade.exchange.result.storage_sell.unavailable";
             case WALLET_REJECTED -> "poketrade.exchange.result.storage_sell.wallet_rejected";
+            // [CHANGED] Bug 1：批量出售(附近箱子) 失败码 → 明确文案
+            case NOTHING_TO_SELL -> "poketrade.exchange.result.storage_sell.nothing_to_sell";
+            case TOO_MANY -> "poketrade.exchange.result.storage_sell.too_many";
             case INVALID_REQUEST -> "poketrade.exchange.result.storage_sell.invalid_request";
             case NONE, INTERNAL_ERROR -> "poketrade.exchange.result.storage_sell.internal_error";
         };
@@ -1985,10 +2646,9 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (now - lastStorageRefreshTime > 10000) {
             lastStorageRefreshTime = now;
             requestStorages();
-            if (storage.getSelectedStorageId() != null) {
-                PacketDistributor.sendToServer(new StorageSnapshotPacket(
-                        sessionId, storage.getSelectedStorageId()));
-            }
+            // [CHANGED] 会话 #21-E：刷新选中箱 + 全部展开箱快照（此前仅选中箱，
+            // 末影箱等非选中展开箱残留旧物品）。
+            refreshExpandedSnapshots();
         }
         // 全屏半透明背景在缩放矩阵外绘制，避免缩放后只压暗界面区域
         renderTransparentBackground(g);
@@ -2033,14 +2693,47 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         g.pose().popPose();
         g.flush();
         com.mojang.blaze3d.systems.RenderSystem.enableDepthTest();
-        endScaledRender(g);
-
-        // [CHANGED] 会话 #12：矩阵外屏幕空间文字重画（整数坐标，根治缩放模糊）。
+        // [CHANGED] 会话 #21-B：操作说明帮助面板（helpButton 点击切换；同样 z=400 提层）
+        if (showHelp) {
+            g.flush();
+            com.mojang.blaze3d.systems.RenderSystem.disableDepthTest();
+            g.pose().pushPose();
+            g.pose().translate(0.0F, 0.0F, 400.0F);
+            renderHelpModal(g);
+            g.pose().popPose();
+            g.flush();
+            com.mojang.blaze3d.systems.RenderSystem.enableDepthTest();
+        }
+        // [CHANGED] 会话 #21-C：一键出售模式选择弹窗（sellWhole 点击；同样 z=400 提层）
+        if (showSellWholePopup) {
+            g.flush();
+            com.mojang.blaze3d.systems.RenderSystem.disableDepthTest();
+            g.pose().pushPose();
+            g.pose().translate(0.0F, 0.0F, 400.0F);
+            renderSellWholePopup(g, lmx, lmy);
+            g.pose().popPose();
+            g.flush();
+            com.mojang.blaze3d.systems.RenderSystem.enableDepthTest();
+        }
+        // [NEW] 会话 #21-H 修订：仓储分类选择弹窗（slotCategory 点击；同样 z=400 提层）
+        if (showCategoryModal) {
+            g.flush();
+            com.mojang.blaze3d.systems.RenderSystem.disableDepthTest();
+            g.pose().pushPose();
+            g.pose().translate(0.0F, 0.0F, 400.0F);
+            renderCategoryModal(g, lmx, lmy);
+            g.pose().popPose();
+            g.flush();
+            com.mojang.blaze3d.systems.RenderSystem.enableDepthTest();
+        }
+        // [CHANGED] 会话 #15-D：文字重放移回缩放矩阵内，随 uiScale 同步缩放（与
+        // StorageBrowserScreen 现有做法一致）；0.75/0.5 档轻微模糊为已接受取舍。
         // MAIN 文字在 z=0 重放：在弹窗区域（z=400 深度≈0.48）被 LEQUAL cull，
         // 主界面文字不透出弹窗，与矩阵内行为一致。
         drawPendingText(g, TextLayer.MAIN);
-        // TOP 文字（弹窗/右键菜单）以 z=400 + disableDepthTest 重放，晚画覆盖弹窗背景。
-        if (sellPreview != null || contextMenu != null) {
+        // TOP 文字（弹窗/右键菜单/帮助面板）以 z=400 + disableDepthTest 重放，晚画覆盖弹窗背景。
+        if (sellPreview != null || contextMenu != null || showHelp
+                || showSellWholePopup || showCategoryModal) {
             g.flush();
             com.mojang.blaze3d.systems.RenderSystem.disableDepthTest();
             g.pose().pushPose();
@@ -2050,11 +2743,22 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             g.flush();
             com.mojang.blaze3d.systems.RenderSystem.enableDepthTest();
         }
+        endScaledRender(g);
+
         // [CHANGED] Bug D 修复：基类 AbstractContainerScreen.render 不调用 renderTooltip，
         // 容器子类必须显式调用，否则背包/仓储物品悬停提示不显示。
-        // [CHANGED] 会话 #12：移到 endScaledRender 之后并传屏幕坐标 mx/my——
-        // tooltip 在矩阵外以整数坐标清晰绘制；方法内以 toLocalX/Y 换算命中（结果与现状恒等）。
-        this.renderTooltip(g, mx, my);
+        // [CHANGED] 会话 #15-D：tooltip 也画回矩阵内（局部坐标 lmx/lmy），随缩放；
+        // 方法内命中逻辑直接用局部坐标（调用方已换算，结果与现状恒等）。
+        // [CHANGED] 会话 #20-B：右键菜单打开且鼠标悬停菜单矩形时，抑制基类 hoveredSlot
+        // tooltip——菜单矩形可能覆盖玩家背包槽位（menu.slots），基类 renderTooltip 会与
+        // 右键菜单 tooltip（z=400 内的 renderTooltip）在同一鼠标位置叠加渲染，表现为
+        // 「两段文字叠印、单层背景、中文乱码重叠尾部正常」（菜单 tooltip 长句延伸到右端）。
+        // [CHANGED] 会话 #20 补丁 8：移除 [DBG-TOOLTIP] 诊断日志（bug 已根治，抑制逻辑保留）——
+        // 右键菜单打开且鼠标在菜单矩形内时跳过基类 hoveredSlot tooltip，避免与右键菜单
+        // tooltip 在同一坐标叠加渲染。
+        if (contextMenu == null || !contextMenuRect().contains(lmx, lmy)) {
+            this.renderTooltip(g, lmx, lmy);
+        }
     }
 
     @Override
@@ -2097,9 +2801,13 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             }
         }
         if (visibleCatalog.isEmpty()) {
-            // 目录为空（搜索/分类过滤后无结果）：在网格中央提示
+            // [CHANGED] 会话 #21-H 修订：目录为空时按模式分流提示——学习模式下目录可能
+            // 因「尚未出售任何物品」而空，给出可操作的引导（先卖一件）；否则走通用无匹配。
+            String key = "LEARNING".equals(this.catalogMode)
+                    ? "poketrade.exchange.catalog.empty.learning"
+                    : "poketrade.exchange.search.none";
             String none = this.font.plainSubstrByWidth(
-                    t("poketrade.exchange.search.none"),
+                    t(key),
                     Math.max(16, layout.catalogGrid().width() - 4));
             recordText(TextLayer.MAIN, none,
                     layout.catalogGrid().x()
@@ -2117,8 +2825,14 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         if (!rightCollapsed) {
             PeStyle.inset(g, layout.cartGrid().x(), layout.cartGrid().y(),
                     layout.cartGrid().width(), layout.cartGrid().height() + 2, 0xFFA8A8A8);
-            for (int i = 0; i < ExchangeUiModel.Layout.CART_CELLS; i++) {
-                int idx = i + cartScroll * cartCols;
+            // [CHANGED] Bug 6：可见格 = cartCols × 可见行（28 格，非容量 54）；渲染前行式钳制，
+            // 避免 cart 尺寸缩水后 cartScroll 越界。idx 仍按行滚偏移取购物车第 N 种物品。
+            int cartVisibleRows = layout.cartGrid().height() / SLOT;
+            int cartTotalRows = ExchangeUiModel.accordionContentRows(cart.size(), cartCols);
+            int renderCartScroll = Math.max(0, Math.min(cartScroll,
+                    Math.max(0, cartTotalRows - cartVisibleRows)));
+            for (int i = 0; i < cartVisibleRows * cartCols; i++) {
+                int idx = i + renderCartScroll * cartCols;
                 int gx = layout.cartGrid().x() + (i % cartCols) * SLOT;
                 int gy = layout.cartGrid().y() + (i / cartCols) * SLOT;
                 PeStyle.slot(g, gx, gy);
@@ -2135,6 +2849,10 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     }
                 }
             }
+            // [CHANGED] Bug 6：行式滚动条（网格右缘外侧）。≤可见行(4 行/28 格)时
+            // PeStyle.scrollbar 自动画平轨 = 向下兼容无滑条。
+            PeStyle.scrollbar(g, layout.cartGrid().right() + 1, layout.cartGrid().y(),
+                    layout.cartGrid().height(), cartTotalRows, cartVisibleRows, renderCartScroll);
         }
         PeStyle.playerInventory(g, layout.inventoryX(), layout.inventoryY(), layout.hotbarY());
     }
@@ -2150,13 +2868,60 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         };
     }
 
+    /** [NEW] 会话 #21-H：目录模式 → 短名（modeText 左上指示器）。未知模式回退原串。 */
+    private static String modeShortLabel(String mode) {
+        return "LEARNING".equals(mode) ? t("poketrade.exchange.mode.learning")
+                : "FULL".equals(mode) ? t("poketrade.exchange.mode.full")
+                : mode == null ? "" : mode;
+    }
+
+    /** [NEW] 会话 #21-H：目录模式 → tooltip 翻译键（未知模式回退 unknown 说明，带 %s 原值）。 */
+    private static String modeTipKey(String mode) {
+        return "LEARNING".equals(mode) ? "poketrade.exchange.mode.learning.tip"
+                : "FULL".equals(mode) ? "poketrade.exchange.mode.full.tip"
+                : "poketrade.exchange.mode.unknown.tip";
+    }
+
     /** [CHANGED] Bug F：目录分类现为可翻译键（itemGroup.* / 模组 tab 键），按当前语言本地化；
-     *  非翻译键（模组 literal 名）translatable 无语言键时 fallback 显示原样；unknown 保持原样。 */
+     *  非翻译键（模组 literal 名）translatable 无语言键时 fallback 显示原样；unknown 保持原样。
+     *  [CHANGED] 会话 #21-C：真实作用 = 物品所属 creative tab 的可翻译键。部分分类键在语言文件
+     *  无对应条目时，getString() 回退返回 key 本身（如 itemGroup.someModTab），此时按
+     *  prettyCategoryKey 美化显示，避免按钮/下拉露出原始键值。 */
     private static Component categoryLabel(String category) {
         if (category == null || category.isEmpty() || "unknown".equals(category)) {
             return Component.literal(category == null ? "unknown" : category);
         }
-        return Component.translatable(category);
+        Component c = Component.translatable(category);
+        String localized = c.getString();
+        if (localized.equals(category)) {
+            return Component.literal(prettyCategoryKey(category));
+        }
+        return c;
+    }
+
+    /** 无语言键的分类键美化：去命名空间前缀（itemGroup. 等），'_' 与 '.' 转空格，单词首字母大写。 */
+    private static String prettyCategoryKey(String key) {
+        String s = key;
+        int dot = s.indexOf('.');
+        if (dot >= 0) {
+            s = s.substring(dot + 1);
+        }
+        StringBuilder sb = new StringBuilder();
+        boolean cap = true;
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch == '_' || ch == '.') {
+                sb.append(' ');
+                cap = true;
+            } else if (cap && Character.isLetter(ch)) {
+                sb.append(Character.toUpperCase(ch));
+                cap = false;
+            } else {
+                sb.append(ch);
+                cap = false;
+            }
+        }
+        return sb.toString().trim();
     }
 
     @Override
@@ -2171,6 +2936,16 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                             Math.max(16, layout.search().width() - 4)),
                     layout.search().x() + 3, layout.search().y() + 3, PeStyle.TEXT_DIM);
         }
+        // [NEW] 会话 #21-H：中栏左上目录模式指示器（学习/全高亮）+ 悬停说明（过滤语义在服务端）。
+        ExchangeUiModel.Rect modeRect = layout.modeText();
+        recordText(TextLayer.MAIN, this.font.plainSubstrByWidth(
+                        modeShortLabel(this.catalogMode), Math.max(8, modeRect.width() - 2)),
+                modeRect.x(), modeRect.y(), PeStyle.TEXT_DIM);
+        if (modeRect.contains(x, y)) {
+            g.renderTooltip(this.font, List.of(Component.translatable(
+                            modeTipKey(this.catalogMode), this.catalogMode)),
+                    java.util.Optional.empty(), this.leftPos + x, this.topPos + y);
+        }
         // 中栏商品分页：‹ / ›
         PeStyle.buttonBg(g, layout.pagePrev().x(), layout.pagePrev().y(),
                 layout.pagePrev().width(), layout.pagePrev().height(),
@@ -2184,13 +2959,20 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         recordButton(TextLayer.MAIN, "›", true,
                 layout.pageNext().x(), layout.pageNext().y(),
                 layout.pageNext().width(), layout.pageNext().height());
-        // 中栏钱包（完整整数金额，位于存入格右侧）
+        // 中栏钱包：大额缩写（1k/1m/1b），悬停显示完整千分位金额（避免大数撑出区域截断/穿模）
         long bal = menu.getBalance();
-        String balStr = t("poketrade.exchange.balance") + " " + ExchangeUiModel.formatAmount(bal);
+        String balStr = t("poketrade.exchange.balance") + " " + ExchangeUiModel.formatWallet(bal);
         recordText(TextLayer.MAIN, this.font.plainSubstrByWidth(balStr,
                         Math.max(16, layout.wallet().width() - 2)),
                 layout.wallet().x(), layout.wallet().y(),
                 bal > 0 ? PeStyle.TEXT_OK : PeStyle.TEXT_DIM);
+        // [CHANGED] 会话 #25：钱包悬停 tooltip 显示完整千分位金额
+        if (layout.wallet().contains(x, y)) {
+            g.renderTooltip(this.font, List.of(
+                            Component.translatable("poketrade.exchange.balance"),
+                            Component.literal(ExchangeUiModel.formatAmount(bal) + " PKM")),
+                    java.util.Optional.empty(), this.leftPos + x, this.topPos + y);
+        }
         // 悬停商品价格提示行（完整整数）
         ExchangeCatalogPacket.EntryWire hoveredEntry = null;
         if (layout.catalogGrid().contains(x, y)) {
@@ -2273,17 +3055,24 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     layout.qtyOne().y() + 2, PeStyle.TEXT_DIM);
         }
         if (!rightCollapsed) {
+            // [CHANGED] Bug 5：统计区重排。容量行独立；「总件数：N」与「总价 M」合并为
+            // 单行（原三行 y+76/87/98 上下叠压拥挤）——总件数左对齐、总价右对齐紧贴栏右缘，
+            // 总价过长时按剩余宽度截断兜底（不吞总件数）。cartTotal 行不再渲染。
             int rw = Math.max(16, layout.cartCapacity().width() - 2);
-            String capStr = t("poketrade.exchange.cart.capacity", cart.size(), 27);
+            String capStr = t("poketrade.exchange.cart.capacity",
+                    cart.size(), ExchangeUiModel.Layout.CART_CAPACITY);
             recordText(TextLayer.MAIN, this.font.plainSubstrByWidth(capStr, rw),
                     layout.cartCapacity().x(), layout.cartCapacity().y(), PeStyle.TEXT_DIM);
             String itemsStr = t("poketrade.exchange.cart.items", cart.totalItems());
-            recordText(TextLayer.MAIN, this.font.plainSubstrByWidth(itemsStr, rw),
-                    layout.cartItems().x(), layout.cartItems().y(), PeStyle.TEXT_DIM);
             String totalStr = t("poketrade.exchange.cart.total") + " "
                     + ExchangeUiModel.formatAmount(cartTotalCost());
+            int totalW = this.font.width(totalStr);
+            int totalX = layout.cartItems().right() - Math.min(totalW, rw);
+            int itemsW = Math.max(16, totalX - 2 - layout.cartItems().x());
+            recordText(TextLayer.MAIN, this.font.plainSubstrByWidth(itemsStr, itemsW),
+                    layout.cartItems().x(), layout.cartItems().y(), PeStyle.TEXT_DIM);
             recordText(TextLayer.MAIN, this.font.plainSubstrByWidth(totalStr, rw),
-                    layout.cartTotal().x(), layout.cartTotal().y(), PeStyle.TEXT_TITLE);
+                    totalX, layout.cartItems().y(), PeStyle.TEXT_TITLE);
         }
         quantityBox.setVisible(qtyActive);
         if (qtyActive && !quantityBox.isFocused()) {
@@ -2324,13 +3113,12 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         recordButton(TextLayer.MAIN, rightBtn, true,
                 layout.collapseRight().x(), layout.collapseRight().y(),
                 layout.collapseRight().width(), layout.collapseRight().height());
-        // 原版容器标题：左栏展开时位于左栏顶部(8,7)；左栏收起时搜索框占满顶行，隐藏
-        if (!leftCollapsed) {
-            String tLabel = this.font.plainSubstrByWidth(this.title.getString(),
-                    Math.max(16, 132 - 10));
-            recordText(TextLayer.MAIN, tLabel,
-                    this.titleLabelX, this.titleLabelY, 0x404040, false);
-        }
+        // [CHANGED] Bug 4：标题常显于钱包行下方（applyLayout 已定位 titleLabelY）；
+        // 不再受左栏收起影响（此前左栏收起即消失，且位于左栏顶部与搜索框抢位）。
+        String tLabel = this.font.plainSubstrByWidth(this.title.getString(),
+                Math.max(16, this.layout.width() - 10));
+        recordText(TextLayer.MAIN, tLabel,
+                this.titleLabelX, this.titleLabelY, 0x404040, false);
         // 不绘制“物品栏”标签：其位置（y=156）与底部按钮行（y=154..166）重叠，
         // 会与“分类：全部”按钮文字叠成“物品分类：全部”的观感；背包网格本身已足够直观。
     }
@@ -2344,12 +3132,133 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     }
 
     /**
+     * [CHANGED] 会话 #21-B：操作说明帮助面板（helpButton 切换）。背景在 z=400 内直接绘制，
+     * 文字经 recordText(TOP) 于矩阵内 z=400 重放（renderHelpModal 在 z=400 段内调用，TOP 重放
+     * 条件已含 showHelp）。每行按面板宽截断，长说明不越界。
+     */
+    private void renderHelpModal(GuiGraphics g) {
+        ExchangeUiModel.Rect modal = layout.helpModal();
+        g.fill(modal.x(), modal.y(), modal.right(), modal.bottom(), 0xFFF1E5C8);
+        PeStyle.windowFrame(g, modal.x(), modal.y(), modal.width(), modal.height());
+        recordText(TextLayer.TOP, t("poketrade.exchange.help.title"),
+                modal.x() + 6, modal.y() + 5, PeStyle.TEXT_TITLE);
+        int textW = Math.max(16, modal.width() - 12);
+        int lineY = modal.y() + 17;
+        for (String line : t("poketrade.exchange.help.body").split("\n")) {
+            recordText(TextLayer.TOP, this.font.plainSubstrByWidth(line, textW),
+                    modal.x() + 6, lineY, PeStyle.TEXT);
+            lineY += 11;
+        }
+    }
+
+    /**
+     * [CHANGED] 会话 #21-C：一键出售模式选择弹窗（sellWhole 点击）。背景/按钮在 z=400 内绘制，
+     * 文字经 recordText(TOP) 于矩阵内 z=400 重放（TOP 重放条件已含 showSellWholePopup）。
+     * 左右两个选项：全部/展开，当前配置默认项高亮（pressed=true）；悬停选项时以 tooltip
+     * 标注两者差异；底部「不再提示」勾选框 + 关闭按钮。
+     */
+    private void renderSellWholePopup(GuiGraphics g, int mx, int my) {
+        ExchangeUiModel.Rect modal = layout.sellWholeModal();
+        g.fill(modal.x(), modal.y(), modal.right(), modal.bottom(), 0xFFF1E5C8);
+        PeStyle.windowFrame(g, modal.x(), modal.y(), modal.width(), modal.height());
+        int textW = Math.max(24, modal.width() - 12);
+        recordText(TextLayer.TOP,
+                this.font.plainSubstrByWidth(t("poketrade.exchange.sell.whole.modal.title"), textW),
+                modal.x() + 6, modal.y() + 5, PeStyle.TEXT_TITLE);
+        // 两个选项按钮（左=全部，右=展开）；当前默认作用域 pressed=true 高亮
+        boolean allPressed = sellWholeMode == PokeTradeConfig.SellWholeMode.ALL;
+        boolean expandedPressed = sellWholeMode == PokeTradeConfig.SellWholeMode.EXPANDED;
+        ExchangeUiModel.Rect allRect = layout.sellWholeAll();
+        ExchangeUiModel.Rect expandedRect = layout.sellWholeExpanded();
+        PeStyle.buttonBg(g, allRect.x(), allRect.y(), allRect.width(), allRect.height(),
+                true, allPressed, allRect.contains(mx, my), this.leftPos + mx, this.topPos + my);
+        recordButton(TextLayer.TOP, this.font.plainSubstrByWidth(
+                        t("poketrade.exchange.sell.whole.all"), Math.max(8, allRect.width() - 4)),
+                true, allRect.x(), allRect.y(), allRect.width(), allRect.height());
+        PeStyle.buttonBg(g, expandedRect.x(), expandedRect.y(), expandedRect.width(), expandedRect.height(),
+                true, expandedPressed, expandedRect.contains(mx, my), this.leftPos + mx, this.topPos + my);
+        recordButton(TextLayer.TOP, this.font.plainSubstrByWidth(
+                        t("poketrade.exchange.sell.whole.expanded"), Math.max(8, expandedRect.width() - 4)),
+                true, expandedRect.x(), expandedRect.y(), expandedRect.width(), expandedRect.height());
+        // 「不再提示」勾选框 + 关闭按钮
+        ExchangeUiModel.Rect dontAskRect = layout.sellWholeDontAsk();
+        g.fill(dontAskRect.x(), dontAskRect.y(), dontAskRect.x() + 10, dontAskRect.y() + 10,
+                sellWholeDontAsk ? 0xFFB8860B : 0xFFE0E0E0);
+        if (sellWholeDontAsk) {
+            g.drawString(this.font, "✓", dontAskRect.x() + 2, dontAskRect.y(), 0xFFFFFFFF);
+        }
+        recordText(TextLayer.TOP, this.font.plainSubstrByWidth(
+                        t("poketrade.exchange.sell.whole.dont.ask"), Math.max(8, dontAskRect.width() - 14)),
+                dontAskRect.x() + 14, dontAskRect.y() + 1, PeStyle.TEXT);
+        ExchangeUiModel.Rect closeRect = layout.sellWholeClose();
+        recordButton(TextLayer.TOP, t("poketrade.exchange.sell.whole.close"),
+                true, closeRect.x(), closeRect.y(), closeRect.width(), closeRect.height());
+        // 悬停选项时用 tooltip 标注差异（模态内 renderTooltip 可直接调用，List 单行形式同全文件）
+        if (allRect.contains(mx, my)) {
+            g.renderTooltip(this.font,
+                    List.of(Component.translatable("poketrade.exchange.sell.whole.all.tip")),
+                    java.util.Optional.empty(), mx, my);
+        } else if (expandedRect.contains(mx, my)) {
+            g.renderTooltip(this.font,
+                    List.of(Component.translatable("poketrade.exchange.sell.whole.expanded.tip")),
+                    java.util.Optional.empty(), mx, my);
+        }
+    }
+
+    /**
+     * [NEW] 会话 #21-H 修订：仓储分类选择弹窗（slotCategory 点击）。背景/文字在 z=400 内绘制，
+     * 文字经 recordText(TOP) 于矩阵内 z=400 重放（TOP 重放条件已含 showCategoryModal）。
+     * 列出「全部」+ 目录各分类（经 categoryLabel 本地化，补齐 lang 键后显示中文），
+     * 点击即选中并关闭；滚轮滚动超出可视 9 行的列表。
+     */
+    private void renderCategoryModal(GuiGraphics g, int mx, int my) {
+        ExchangeUiModel.Rect modal = layout.categoryModal();
+        g.fill(modal.x(), modal.y(), modal.right(), modal.bottom(), 0xFFF1E5C8);
+        PeStyle.windowFrame(g, modal.x(), modal.y(), modal.width(), modal.height());
+        recordText(TextLayer.TOP,
+                this.font.plainSubstrByWidth(t("poketrade.exchange.category.modal.title"),
+                        Math.max(24, modal.width() - 12)),
+                modal.x() + 6, modal.y() + 5, PeStyle.TEXT_TITLE);
+        int rowY = modal.y() + 16;
+        int textW = Math.max(24, modal.width() - 12);
+        for (int r = 0; r < CATEGORY_VISIBLE_ROWS; r++) {
+            int target = categoryScroll + r;
+            String label;
+            boolean selected;
+            if (target == 0) {
+                label = t("poketrade.exchange.category.all");
+                selected = slotCategoryIndex < 0;
+            } else if (target - 1 < categories.size()) {
+                label = categoryLabel(categories.get(target - 1)).getString();
+                selected = slotCategoryIndex == target - 1;
+            } else {
+                break; // 已超出实际条目数
+            }
+            PeStyle.segmentedBg(g, modal.x() + 4, rowY, modal.width() - 8, CATEGORY_ROW_H,
+                    selected, mx >= modal.x() + 4 && mx <= modal.right() - 4
+                            && my >= rowY && my < rowY + CATEGORY_ROW_H,
+                    mx, my);
+            recordText(TextLayer.TOP,
+                    this.font.plainSubstrByWidth(label, textW),
+                    modal.x() + 6, rowY + 2, selected ? PeStyle.TEXT_PKM : PeStyle.TEXT);
+            rowY += CATEGORY_ROW_H;
+        }
+        // 右侧滚动条（含「全部」共 categories+1 行；无超出时自动画平轨）
+        PeStyle.scrollbar(g, modal.right() - 3, modal.y() + 16,
+                CATEGORY_VISIBLE_ROWS * CATEGORY_ROW_H,
+                categories.size() + 1, CATEGORY_VISIBLE_ROWS, categoryScroll);
+    }
+
+    /**
      * 出售预览模态标签/按钮——[CHANGED] 会话 #12：背景几何在矩阵内 z=400 绘制，
      * 文字全部改 recordText(TOP)，在 endScaledRender 后以屏幕空间整数坐标 + z=400 重放。
      */
     private void renderSellPreviewLabels(GuiGraphics g, int mouseX, int mouseY) {
         ExchangeUiModel.Rect modal = layout.previewModal();
         ExchangeUiModel.Rect lines = layout.previewLines();
+        // [CHANGED] 会话 #21-D：x/y 供下方取消/确认按钮 hovered 判定使用（既有逻辑，保持不动）；
+        // 本函数新增的条目悬停命中与来源 tooltip 改用布局局部坐标 mouseX/mouseY
+        // （leftPos 为屏幕居中偏移，仅适用于未缩放矩阵，条目行命中不可沿用）。
         int x = mouseX - leftPos, y = mouseY - topPos;
         int w = modal.width();
         int textWidth = Math.max(32, w - 20);
@@ -2368,13 +3277,22 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         }
         // 仓储信息行
         if (sellPreview.source() == ExchangeUiModel.SellSource.STORAGE && storagePreview != null) {
-            String perm = storagePreview.permissionAllowed()
-                    ? t("poketrade.exchange.sell.preview.permission.ok")
-                    : t("poketrade.exchange.sell.preview.permission.denied");
-            String revision = storagePreview.revision() < 0 ? "-"
-                    : Long.toString(storagePreview.revision());
+            // [CHANGED] 会话 #21-E：不再显示原始 storageId 键值（minecraft:overworld|…|坐标）
+            // 与单箱 revision——改为预览物品的真实来源箱名列表（含标记号，跨箱子多来源）。
+            List<String> sources = new ArrayList<>();
+            for (List<String> names : buildPreviewItemSources().values()) {
+                for (String n : names) {
+                    if (!sources.contains(n)) {
+                        sources.add(n);
+                    }
+                }
+            }
+            if (sources.isEmpty() && storagePreview.storageName() != null
+                    && !storagePreview.storageName().isEmpty()) {
+                sources.add(storagePreview.storageName());
+            }
             String info = t("poketrade.exchange.sell.preview.storage_info",
-                    storagePreview.storageName(), storagePreview.storageId(), perm, revision);
+                    String.join("、", sources));
             recordText(TextLayer.TOP, this.font.plainSubstrByWidth(info, textWidth),
                     modal.x() + 6, modal.y() + 26, PeStyle.TEXT_DIM);
         }
@@ -2384,6 +3302,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         // （几何来自 ExchangeUiModel.previewRowLayout 纯函数，便于测试）；名称整行
         // （名称 ×数量）截断到 priceX-6，两者永不重叠，短价格时名称可延展更宽。
         int pageStart = previewPage * ExchangeUiModel.Layout.PREVIEW_ROWS;
+        // [CHANGED] 会话 #21-D：悬停行 tooltip（#21）+ 条目名跑马灯（#22）+ 右侧滑条（#22）。
+        int hoveredLine = -1;
         for (int i = 0; i < ExchangeUiModel.Layout.PREVIEW_ROWS; i++) {
             int idx = pageStart + i;
             if (idx >= sellPreview.lines().size()) break;
@@ -2393,13 +3313,69 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     Math.max(24, modal.right() - 24 - lines.x()));
             ExchangeUiModel.PreviewRowLayout rowLayout =
                     ExchangeUiModel.previewRowLayout(modal, lines, this.font.width(subtotal));
-            String lineText = this.font.plainSubstrByWidth(
-                    t("poketrade.exchange.sell.preview.line", line.displayName(), line.count()),
-                    rowLayout.nameMax());
-            recordText(TextLayer.TOP, lineText,
-                    lines.x(), lines.y() + i * 11, PeStyle.TEXT_DIM);
+            int rowY = lines.y() + i * 11;
+            // 悬停行高亮（背景淡色，指示可点击单条出售）。
+            // [CHANGED] 会话 #21-D：命中用布局局部坐标 mouseX/mouseY（=调用方 lmx/lmy）——
+            // 函数开头 x=mouseX-leftPos 是历史死代码（leftPos 为屏幕居中偏移，在 uiScale
+            // 矩阵内重复减去会导致悬停错位），此处与 drawContextMenuTooltip 同源。
+            if (mouseX >= lines.x() && mouseX < lines.right()
+                    && mouseY >= rowY && mouseY < rowY + 11) {
+                hoveredLine = idx;
+                g.fill(lines.x(), rowY, lines.right(), rowY + 11, 0x20FFFFFF);
+            }
+            String lineTextFull = t("poketrade.exchange.sell.preview.line",
+                    line.displayName(), line.count());
+            // 名称超宽 → 跑马灯横向滚动（与仓储箱子名同款 marqueeX），不再截断；
+            // 不超宽保持静态截断（短名静止，符合「名称过长时增加滚动」）。
+            if (this.font.width(lineTextFull) > rowLayout.nameMax()) {
+                // [CHANGED] 会话 #24c：marqueeX 改「头追尾」传送带——循环绘制所有与
+                // 可见区相交的副本（间距 marqueePeriod），文字流连续无空档；价格在下方
+                // recordText(TOP) 后记录、z 顺序在后，滚到价格左缘的文字被价格盖住。
+                // [CHANGED] 会话 #24b：speedMs 40→60，与表头跑马灯同步减速。
+                int gap = 24;
+                int priceX = rowLayout.priceX() - 4;
+                int period = ExchangeUiModel.marqueePeriod(this.font.width(lineTextFull), gap);
+                int mx = ExchangeUiModel.marqueeX(System.currentTimeMillis(), 60,
+                        this.font.width(lineTextFull), gap, lines.x(), priceX);
+                for (int xx = mx; xx < priceX; xx += period) {
+                    if (xx + this.font.width(lineTextFull) > lines.x()) {
+                        recordText(TextLayer.TOP, lineTextFull, xx, rowY, PeStyle.TEXT_DIM);
+                    }
+                }
+            } else {
+                recordText(TextLayer.TOP, this.font.plainSubstrByWidth(lineTextFull, rowLayout.nameMax()),
+                        lines.x(), rowY, PeStyle.TEXT_DIM);
+            }
             recordText(TextLayer.TOP, subtotal,
-                    rowLayout.priceX(), lines.y() + i * 11, PeStyle.TEXT_TITLE);
+                    rowLayout.priceX(), rowY, PeStyle.TEXT_TITLE);
+        }
+        // 向下兼容滑条：条目数 > 可见行时右侧指示可滚动（≤ PREVIEW_ROWS 时自动平轨）
+        if (sellPreview.lines().size() > ExchangeUiModel.Layout.PREVIEW_ROWS) {
+            PeStyle.scrollbar(g, lines.right() + 1, lines.y(), lines.height(),
+                    sellPreview.lines().size(), ExchangeUiModel.Layout.PREVIEW_ROWS,
+                    pageStart);
+        }
+        // 悬停条目 tooltip：行1=物品名×数量；行2=单价·小计；行3=来源（仓储明确标注来源仓储列表）
+        if (hoveredLine >= 0) {
+            ExchangeUiModel.PreviewLine line = sellPreview.lines().get(hoveredLine);
+            List<Component> tipLines = new ArrayList<>();
+            tipLines.add(Component.literal(line.displayName() + " ×" + line.count()));
+            tipLines.add(Component.literal(t("poketrade.exchange.sell.preview.tip.price",
+                    ExchangeUiModel.formatAmount(line.unitPrice()),
+                    ExchangeUiModel.formatAmount(line.subtotal()))));
+            if (sellPreview.source() == ExchangeUiModel.SellSource.STORAGE) {
+                // [CHANGED] 会话 #21-E：逐条精确来源——该物品聚合自哪些箱子（含标记号）。
+                // 多箱子（末影箱+箱子）时逐一列出，不再统一显示单一选中箱。
+                List<String> names = buildPreviewItemSources().getOrDefault(line.itemId(), List.of());
+                String src = names.isEmpty()
+                        ? (storagePreview != null && storagePreview.storageName() != null
+                                ? storagePreview.storageName() : "?")
+                        : String.join("、", names);
+                tipLines.add(Component.literal(t("poketrade.exchange.sell.preview.tip.storage", src)));
+            } else {
+                tipLines.add(Component.literal(t("poketrade.exchange.sell.preview.tip.inventory")));
+            }
+            g.renderTooltip(this.font, tipLines, java.util.Optional.empty(), mouseX, mouseY);
         }
         // 总计
         String total = t("poketrade.exchange.sell.preview.total") + " "
@@ -2445,14 +3421,30 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     }
 
     private ExchangeUiModel.Rect contextMenuRect() {
-        int w = 92;
-        int h = 36; // 3 项 × 12px
+        int w = 118;
+        int h = CONTEXT_MENU_ITEMS * 12; // 7 项 × 12px（会话 #16：批量操作扩到 7 项）
         int x = Math.max(2, Math.min(contextMenu.x(), layout.width() - w - 2));
         int y = Math.max(2, Math.min(contextMenu.y(), layout.height() - h - 2));
         return new ExchangeUiModel.Rect(x, y, w, h);
     }
 
-    /** 右键菜单：仓储槽位操作（拿起 / 取出到背包 / 待售）。 */
+    /** 右键菜单项数（[CHANGED] 会话 #21-D：移除「拿起」「加入/移出待售」两项——
+     *  玩家反馈这两个操作已被批量操作/一键出售取代、且容易与批量出售冲突。安全边界：
+     *  pickUpFromStorage 仍被左键点击、withdrawFromStorage 仍被右 Shift 取出使用，
+     *  底层方法必须保留，仅从菜单隐藏。剩余：0 取出到背包 / 1 批量取出同类 /
+     *  2 批量出售同类(整箱) / 3 批量出售同类(附近箱子) / 4 一键出售(整箱全部)）。 */
+    private static final int CONTEXT_MENU_ITEMS = 5;
+
+    /** 右键菜单项：标签 lang 键 + 悬停 tooltip lang 键（null = 无 tooltip）。 */
+    private static final String[][] CONTEXT_MENU_ENTRIES = {
+            {"poketrade.exchange.withdraw.to_inventory", null},
+            {"poketrade.exchange.batch.withdraw", "poketrade.exchange.batch.withdraw.tip"},
+            {"poketrade.exchange.batch.sell.storage", "poketrade.exchange.batch.sell.storage.tip"},
+            {"poketrade.exchange.batch.sell.nearby", "poketrade.exchange.batch.sell.nearby.tip"},
+            {"poketrade.exchange.batch.sell.whole", "poketrade.exchange.batch.sell.whole.tip"}
+    };
+
+    /** 右键菜单：仓储槽位操作（拿起 / 取出到背包 / 待售 / 4 项批量操作 + 悬停 tooltip）。 */
     private void renderContextMenu(GuiGraphics g, int mx, int my) {
         if (contextMenu == null) {
             return;
@@ -2460,40 +3452,230 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         ExchangeUiModel.Rect rect = contextMenuRect();
         g.fill(rect.x(), rect.y(), rect.right(), rect.bottom(), 0xF0E8E0C8);
         PeStyle.windowFrame(g, rect.x(), rect.y(), rect.width(), rect.height());
-        String[] labels = {
-                t("poketrade.exchange.pickup"),
-                t("poketrade.exchange.withdraw.to_inventory"),
-                t("poketrade.exchange.sell.toggle")
-        };
-        for (int i = 0; i < 3; i++) {
+        // [CHANGED] 会话 #20 补丁 8：悬停命中改为「行级」判定 + 循环外只画一次 tooltip。
+        // 补丁 7 的 rect.contains(mx, my) 与行号 i 无关：鼠标一进菜单矩形即 7 行全部
+        // hovered=true，i=3..6 四个带 tip 的行各调一次 drawContextMenuTooltip 在同一坐标
+        // 叠加（「叠印字墙」根因未除）。现按真实 y 落在本行 [rowY, rowY+12) 才命中，
+        // 并先收集 hoveredIndex，循环结束再统一画一次 tooltip，杜绝同帧多画。
+        int hoveredIndex = -1;
+        for (int i = 0; i < CONTEXT_MENU_ITEMS; i++) {
             int rowY = rect.y() + i * 12;
-            boolean hovered = rect.contains(mx, rowY + 6);
+            boolean hovered = mx >= rect.x() && mx < rect.right()
+                    && my >= rowY && my < rowY + 12;
             if (hovered) {
+                hoveredIndex = i;
                 g.fill(rect.x() + 1, rowY, rect.right() - 1, rowY + 12, 0x408B6B1B);
             }
-            recordText(TextLayer.TOP, labels[i], rect.x() + 4, rowY + 2, PeStyle.TEXT);
+            recordText(TextLayer.TOP, t(CONTEXT_MENU_ENTRIES[i][0]),
+                    rect.x() + 4, rowY + 2, PeStyle.TEXT);
         }
+        // 悬停 tooltip：循环外每帧至多调用一次 renderTooltip（悬停行带 tip 时才画）
+        if (hoveredIndex >= 0 && CONTEXT_MENU_ENTRIES[hoveredIndex][1] != null) {
+            drawContextMenuTooltip(g, t(CONTEXT_MENU_ENTRIES[hoveredIndex][1]), mx, my);
+        }
+    }
+
+    /**
+     * 右键菜单悬停 tooltip：改用原版 {@link GuiGraphics#renderTooltip} 渲染。
+     * [CHANGED] 会话 #19/#20：自绘管线（fill + recordText→drawPendingText→drawString）
+     * 在 CJK 字形下反复出现「中文乱码重叠、尾部正常」，两次修复（换行 wrap / 去二次截断）
+     * 均未根治；而本项目仓储/目录/购物车悬停全部走原版 renderTooltip 且中文显示正常。
+     * 故改回原版标准多行 tooltip 管线（对任意文本稳健、自动避边与缩进、随矩阵缩放）。
+     * 多行仍由 {@link #wrapText} 按完整码点拆行，绝不切半个字符。
+     */
+    private void drawContextMenuTooltip(GuiGraphics g, String text, int mx, int my) {
+        int maxW = Math.max(40, layout.width() - 40) - 8;
+        List<Component> lines = new ArrayList<>();
+        for (String line : wrapText(text, maxW)) {
+            lines.add(Component.literal(line));
+        }
+        if (!lines.isEmpty()) {
+            g.renderTooltip(this.font, lines, java.util.Optional.empty(), mx, my);
+        }
+    }
+
+    /** 按像素宽度把文本拆成多行（换行符视为分隔；宽字符按 font 实际宽度计）。 */
+    private List<String> wrapText(String text, int maxPx) {
+        List<String> lines = new ArrayList<>();
+        if (text == null || text.isEmpty() || maxPx <= 0) {
+            return text == null || text.isEmpty() ? lines : List.of(text);
+        }
+        for (String seg : text.split("\n", -1)) {
+            if (this.font.width(seg) <= maxPx) {
+                lines.add(seg);
+                continue;
+            }
+            StringBuilder line = new StringBuilder();
+            for (int i = 0; i < seg.length(); ) {
+                int cp = seg.codePointAt(i);
+                int charLen = Character.charCount(cp);
+                String ch = seg.substring(i, i + charLen);
+                if (this.font.width(line.toString() + ch) > maxPx) {
+                    if (line.length() > 0) {
+                        lines.add(line.toString());
+                        line.setLength(0);
+                        continue;
+                    }
+                }
+                line.append(ch);
+                i += charLen;
+            }
+            if (line.length() > 0) {
+                lines.add(line.toString());
+            }
+        }
+        return lines;
     }
 
     private void runContextOption(ContextMenu menu, int option) {
         selectStorageById(menu.storageId());
         switch (option) {
-            case 0 -> pickUpFromStorage(menu.slot());
-            case 1 -> withdrawFromStorage(menu.slot());
-            case 2 -> {
-                if (storage.hasPermission(StoragePermission.SELL)) {
-                    if (sellQueue.containsKey(menu.slot().slotIndex())) {
-                        sellQueue.remove(menu.slot().slotIndex());
-                    } else {
-                        sellQueue.put(menu.slot().slotIndex(), new PendingSell(
-                                menu.slot().slotIndex(), menu.slot().itemId(),
-                                menu.slot().count(), menu.slot().fingerprint()));
-                    }
-                }
-            }
+            // [CHANGED] 会话 #21-D：菜单移除「拿起」(旧 case 0) 与「加入/移出待售」(旧 case 2)；
+            // pickUpFromStorage 仍由左键点击、withdrawFromStorage 仍由右 Shift 取出调用，
+            // 仅菜单不再暴露这两项。case 号顺移：
+            case 0 -> withdrawFromStorage(menu.slot());
+            case 1 -> withdrawAllFromStorage(menu.slot().itemId());
+            case 2 -> batchSellItemFromStorage(menu.slot().itemId());
+            case 3 -> batchSellItemNearby(menu.slot().itemId());
+            // [CHANGED] 会话 #21-C：右键菜单「一键出售全部」复用弹窗逻辑（弹窗/直售同出口）。
+            case 4 -> runSellWhole(PokeTradeConfig.sellWholeMode());
             default -> {
             }
         }
+    }
+
+    // ================= 批量操作（会话 #16，任务 B） =================
+
+    /** 批量取出同类(整箱)：把当前仓储中与 itemId 同类的槽位全部取出合并到背包。 */
+    private void withdrawAllFromStorage(String itemId) {
+        StorageId selected = storage.getSelectedStorageId();
+        if (selected == null || !storage.hasPermission(StoragePermission.WITHDRAW)) {
+            sellMessage = t("poketrade.exchange.withdraw.denied");
+            sellMessageColor = PeStyle.TEXT_ERROR;
+            return;
+        }
+        if (storage.getSelectedSnapshotRevision() < 0) {
+            sellMessage = t("poketrade.exchange.sell.storage.loading");
+            sellMessageColor = PeStyle.TEXT_WARN;
+            return;
+        }
+        if (workflow.pending()) {
+            return;
+        }
+        PacketDistributor.sendToServer(new StorageBatchPacket(
+                sessionId, UUID.randomUUID().toString(),
+                StorageBatchPacket.Action.WITHDRAW_ALL, StorageBatchPacket.Scope.CURRENT,
+                selected, itemId, 0, null));
+        sellMessage = t("poketrade.exchange.batch.withdraw.pending");
+        sellMessageColor = PeStyle.TEXT_DIM;
+    }
+
+    /** 批量出售同类(整箱)：本地快照筛同 itemId 槽位灌入待售队列 → 现有确认流程。 */
+    private void batchSellItemFromStorage(String itemId) {
+        StorageId selected = storage.getSelectedStorageId();
+        if (selected == null || !storage.hasPermission(StoragePermission.SELL)) {
+            sellMessage = t("poketrade.exchange.sell.blocked");
+            sellMessageColor = PeStyle.TEXT_ERROR;
+            return;
+        }
+        if (storage.getSelectedSnapshotRevision() < 0) {
+            sellMessage = t("poketrade.exchange.sell.storage.loading");
+            sellMessageColor = PeStyle.TEXT_WARN;
+            return;
+        }
+        sellQueue.clear();
+        StorageId sid = storage.getSelectedStorageId();
+        for (StorageItemSlot slot : storage.visibleSlots().values()) {
+            if (slot.itemId().equals(itemId) && slot.count() > 0) {
+                sellQueue.put(pendingSellKey(sid, slot.slotIndex()), new PendingSell(
+                        sid, slot.slotIndex(), slot.itemId(), slot.count(), slot.fingerprint()));
+            }
+        }
+        submitStorageSell();
+    }
+
+    /** 批量出售同类(附近箱子)：服务端半径扫描 + 直接出售（无本地预览，贵重项由服务端校验）。 */
+    private void batchSellItemNearby(String itemId) {
+        if (!sellEnabled) {
+            sellMessage = t("poketrade.exchange.sell.disabled");
+            sellMessageColor = PeStyle.TEXT_ERROR;
+            return;
+        }
+        if (workflow.pending()) {
+            return;
+        }
+        // [CHANGED] Bug 1：此前漏调 workflow.begin —— 成功回执被 Workflow.complete 判为
+        // IGNORE（无成功提示/无仓储刷新），「正在出售附近同类物品…」永久卡住 = 「无响应」。
+        // 与 sendStorageSell 的 STORAGE_SELL 契约保持一致。
+        if (!workflow.begin(ExchangeUiModel.Operation.STORAGE_SELL, menu.getResultNonce())) {
+            return;
+        }
+        // [CHANGED] 会话 #21-D：携带「本箱」（当前选中/右键的仓储）storageId——
+        // 服务端 NEARBY 扫描对末影箱（virtual 无坐标）直接跳过、且本箱可能超出
+        // 玩家坐标半径，导致「本箱物品不会被卖出去」。服务端据此显式追加本箱同类可售槽位。
+        PacketDistributor.sendToServer(new StorageBatchPacket(
+                sessionId, UUID.randomUUID().toString(),
+                StorageBatchPacket.Action.SELL_ITEM, StorageBatchPacket.Scope.NEARBY,
+                storage.getSelectedStorageId(), itemId, storage.getRadius(), null));
+        sellMessage = t("poketrade.exchange.batch.sell.nearby.pending");
+        sellMessageColor = PeStyle.TEXT_DIM;
+    }
+
+    /**
+     * 一键出售：按 {@link SellWholeMode} 选取目标箱子串联出售其全部可售物品。
+     * [CHANGED] 会话 #19：此前只卖当前选中箱子；现按玩家要求检测箱子列表状态。
+     * [CHANGED] 会话 #21-C：原 sellWholeStorage() 重构为 runSellWhole(mode)——
+     * EXPANDED=仅当前展开且 SELL 权限、快照已加载的箱子（等价旧行为）；ALL=全部
+     * 可见箱子中可售者（含收起态）。sendStorageSell 按 PendingSell.storageId 多箱子
+     * 聚合，revisions 逐箱校验（任务 C 按钮与右键菜单共用）。
+     */
+    private void runSellWhole(PokeTradeConfig.SellWholeMode mode) {
+        if (workflow.pending()) {
+            return;
+        }
+        List<StorageDescriptor> targets = new ArrayList<>();
+        for (StorageDescriptor d : storage.visibleStorages()) {
+            if (mode == PokeTradeConfig.SellWholeMode.ALL) {
+                // ALL：所有 SELL 权限且快照已加载的箱子（无论展开与否）
+                if (storage.allowsOn(d.storageId(), StoragePermission.SELL)
+                        && snapshotsByStorage.get(d.storageId().asString()) != null) {
+                    targets.add(d);
+                }
+            } else if (expandedStorages.contains(d.storageId().asString())
+                    && storage.allowsOn(d.storageId(), StoragePermission.SELL)
+                    && snapshotsByStorage.get(d.storageId().asString()) != null) {
+                // EXPANDED：仅展开态（等价旧 sellWholeStorage 行为）
+                targets.add(d);
+            }
+        }
+        if (targets.isEmpty()) {
+            sellMessage = t("poketrade.exchange.batch.sell.whole.empty");
+            sellMessageColor = PeStyle.TEXT_WARN;
+            return;
+        }
+        sellQueue.clear();
+        sellPreview = null;
+        storagePreview = null;
+        previewConfirmed = false;
+        for (StorageDescriptor d : targets) {
+            StorageId sid = d.storageId();
+            StorageSnapshot snap = snapshotsByStorage.get(sid.asString());
+            if (snap == null) {
+                continue;
+            }
+            for (StorageItemSlot slot : snap.slots().values()) {
+                if (slot.itemId() != null && slot.count() > 0) {
+                    sellQueue.put(pendingSellKey(sid, slot.slotIndex()), new PendingSell(
+                            sid, slot.slotIndex(), slot.itemId(), slot.count(), slot.fingerprint()));
+                }
+            }
+        }
+        submitStorageSell();
+    }
+
+    /** 待售条目复合键：跨箱子唯一。 */
+    private static String pendingSellKey(StorageId storageId, int slotIndex) {
+        return storageId.asString() + "#" + slotIndex;
     }
 
     /** 按原因聚合的跳过明细文案："无卖价×1 禁止交易×1"（无跳过时返回空串）。 */
@@ -2527,12 +3709,25 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
     /** 指针物品 tooltip：名称/类别/来源模组/买价/卖价。 */
     @Override
     protected void renderTooltip(GuiGraphics g, int mouseX, int mouseY) {
-        // [CHANGED] 会话 #12：矩阵外传入屏幕坐标 mx/my，命中换算回局部坐标
-        // （toLocalX(mx) 与原 lmx 恒等，结果与现状一致）；g.renderTooltip 在矩阵外
-        // 以屏幕坐标绘制 → tooltip 文字像素级清晰。
-        int x = toLocalX(mouseX), y = toLocalY(mouseY);
+        // [CHANGED] 会话 #15-D：矩阵内传入局部坐标 lmx/lmy（render() 已换算）；
+        // 命中与绘制都直接用局部坐标，随矩阵缩放。
+        int x = mouseX, y = mouseY;
         if (sellPreview != null) {
             // 弹窗打开时禁止下层目录/购物车/仓储的悬停提示，避免提示浮在弹窗之上
+            return;
+        }
+        // [CHANGED] 会话 #19：右键菜单唤起时屏蔽仓储/目录/购物车悬停信息
+        //（「屏蔽箱子指标信息」），避免指标 tooltip 与菜单重叠显示。
+        if (contextMenu != null) {
+            return;
+        }
+        // [CHANGED] 会话 #21-C：一键出售模式弹窗打开时同样屏蔽下层悬停信息（选项差异
+        // tooltip 由 renderSellWholePopup 内自行渲染）。
+        if (showSellWholePopup) {
+            return;
+        }
+        // [NEW] 会话 #21-H 修订：分类选择弹窗打开时同样屏蔽下层悬停信息
+        if (showCategoryModal) {
             return;
         }
         // 左栏：手风琴表头信息 / 展开网格槽位信息
@@ -2540,16 +3735,25 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             AccordionEntry entry = accordionEntryAt(x, y);
             if (entry != null) {
                 if (entry.header().contains(x, y)) {
+                    // [CHANGED] 会话 #21-G Bug 5/6：指针信息隔离——悬停表头右侧展开/收起
+                    // 按钮区（right-15..right）时不显示仓储详情 tooltip，与按钮高亮互斥，
+                    // 二者只能出现一个，避免长提示挡在按钮上方。
+                    if (x >= entry.header().right() - 15) {
+                        return;
+                    }
                     StorageDescriptor d = entry.descriptor();
                     List<Component> lines = new ArrayList<>();
-                    lines.add(Component.literal(d.displayName()));
+                    // [CHANGED] 会话 #21-E：表头 tooltip 与列表同名带同类型标记号
+                    lines.add(Component.literal(displayNameWithMarker(d)));
                     lines.add(Component.translatable(
                             "poketrade.storage.type." + d.storageId().adapterType()));
                     lines.add(Component.translatable(d.claimed()
                                     ? "poketrade.storage.distance" : "poketrade.gui.unclaimed",
                             d.distance()));
-                    String owner = d.ownerId() == null ? "-"
-                            : d.ownerId().toString().substring(0, 8) + "…";
+                    String owner = d.ownerName() == null || d.ownerName().isBlank()
+                            ? (d.ownerId() == null ? "-"
+                                    : d.ownerId().toString().substring(0, 8) + "…")
+                            : d.ownerName();
                     lines.add(Component.translatable("poketrade.storage.owner", owner));
                     if (d.scanComplete() && d.slotCount() > 0) {
                         lines.add(Component.translatable("poketrade.storage.capacity",
@@ -2580,7 +3784,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                     ItemStack s = toStack(slot);
                     List<Component> lines = new ArrayList<>();
                     lines.add(s.isEmpty() ? Component.literal(slot.itemId()) : s.getHoverName());
-                    lines.add(Component.translatable("poketrade.exchange.snapshot.hint"));
+                    // [CHANGED] 会话 #21-C：移除操作说明行（snapshot.hint）——已有「操作说明」
+                    // 帮助面板承载全部操作指引，tooltip 只留基本信息和价格，不再挡视野。
                     // [CHANGED] Bug 2：仓储槽位 tooltip 补价格行（目录有价显示买/卖价，无价提示暂无定价）
                     long buy = 0, sell = 0;
                     boolean priced = false;
@@ -2606,13 +3811,8 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 }
             }
         }
-        // 存入格提示：单件直接出售
-        if (layout.deposit().contains(x, y)) {
-            g.renderTooltip(this.font, List.of(
-                            Component.translatable("poketrade.exchange.sell.direct.hint")),
-                    java.util.Optional.empty(), mouseX, mouseY);
-            return;
-        }
+        // [CHANGED] 会话 #21-C：移除存入格操作说明 tooltip（sell.direct.hint 是纯操作指引，
+        // 已有帮助面板承载；hover 存入格不再弹提示，落到下方基类 hoveredSlot 处理）。
         if (layout.catalogGrid().contains(x, y)) {
             int idx = (x - layout.catalogGrid().x()) / SLOT
                     + ((y - layout.catalogGrid().y()) / SLOT) * gridCols
@@ -2693,6 +3893,17 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
 
     /** 左栏内容：仓储列表 + 选中仓储快照槽位（渲染在 translate 内，用相对坐标）。 */
     private void renderLeftPanel(GuiGraphics g, int x, int y) {
+        // [CHANGED] 会话 #21-B：操作说明按钮 —— 左栏范围输入框上方、与展开按钮同 Y（12），
+        // 点击切换帮助面板（不再用指针旁大字提示挡视野）。开启时 selected 高亮。
+        PeStyle.buttonBg(g, layout.helpButton().x(), layout.helpButton().y(),
+                layout.helpButton().width(), layout.helpButton().height(),
+                true, showHelp, layout.helpButton().contains(x, y),
+                this.leftPos + x, this.topPos + y);
+        recordButton(TextLayer.MAIN, this.font.plainSubstrByWidth(
+                        t("poketrade.exchange.help.button"),
+                        Math.max(8, layout.helpButton().width() - 4)),
+                true, layout.helpButton().x(), layout.helpButton().y(),
+                layout.helpButton().width(), layout.helpButton().height());
         // 范围行：标签 + 点击切换按钮（显示当前档位；selected 高亮表示当前生效值）
         recordText(TextLayer.MAIN, t("poketrade.gui.range"),
                 layout.left().x() + 2, layout.radiusInput().y() + 2, PeStyle.TEXT);
@@ -2702,6 +3913,23 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 true, false, 0, 0);
         recordSegmented(TextLayer.MAIN, String.valueOf(storage.getRadius()), true,
                 radiusCtrl.x(), radiusCtrl.y(), radiusCtrl.width(), radiusCtrl.height());
+        // 一键出售(整箱全部) 按钮：右贴左栏右缘；选中仓储 + 有出售权限 + 无进行中操作才可用
+        // [CHANGED] 会话 #16 组 4（任务 C）：新增 sellWhole 控件，复用 sellWholeStorage 确认流程
+        ExchangeUiModel.Rect sellWholeCtrl = layout.sellWhole();
+        boolean sellWholeEnabled = storage.getSelectedStorageId() != null
+                && storage.hasPermission(StoragePermission.SELL)
+                && !workflow.pending();
+        boolean sellWholeHover = sellWholeCtrl.contains(x, y);
+        PeStyle.buttonBg(g, sellWholeCtrl.x(), sellWholeCtrl.y(),
+                sellWholeCtrl.width(), sellWholeCtrl.height(),
+                sellWholeEnabled, false, sellWholeHover && sellWholeEnabled,
+                this.leftPos + x, this.topPos + y);
+        recordButton(TextLayer.MAIN,
+                this.font.plainSubstrByWidth(t("poketrade.exchange.sell.whole"),
+                        Math.max(8, sellWholeCtrl.width() - 2)),
+                sellWholeEnabled,
+                sellWholeCtrl.x(), sellWholeCtrl.y(),
+                sellWholeCtrl.width(), sellWholeCtrl.height());
         // 物品搜索提示
         // [CHANGED] 会话 #12：hint 与 storageSearchBox 内部文字同尺寸，随矩阵缩放（取舍见开发日志）
         if (storageSearchBox != null && storageSearchBox.getValue().isEmpty()
@@ -2736,9 +3964,19 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
                 layout.filterSell().x(), layout.filterSell().y(),
                 layout.filterSell().width(), layout.filterSell().height());
         // 仓储手风琴：每个箱子一行，展开显示全部格子（按面板宽度 7 列，超 3 行滚动）
+        // [CHANGED] 会话 #15-A：scissor 裁剪到底部按钮线之上（纵深防御），任何越界的
+        // 展开网格/悬停高亮都被裁掉；按钮绘制在循环之后、裁剪区之外保持可见。
+        g.enableScissor(screenX(layout.left().x()), screenY(layout.listTop()),
+                screenX(layout.left().right()), screenY(ACCORDION_BOTTOM_LIMIT));
         for (AccordionEntry entry : accordionEntries()) {
             renderAccordionEntry(g, entry, x, y);
         }
+        g.disableScissor();
+        // 整体滚动条（列表右缘外列间隙 141..143，不与每格滚动条 137..139 重叠；
+        // 无需滚动时 PeStyle.scrollbar 自动画平轨，无害）
+        PeStyle.scrollbar(g, layout.left().right() + 1, layout.listTop(),
+                ACCORDION_BOTTOM_LIMIT - layout.listTop(),
+                storage.visibleStorages().size(), accordionEntries().size(), accordionScroll);
         // 出售区按钮（刷新 / 清空待售 / 存入；批量出售已移到购物车）
         PeStyle.buttonBg(g, layout.storageRefresh().x(), layout.storageRefresh().y(),
                 layout.storageRefresh().width(), layout.storageRefresh().height(),
@@ -2747,11 +3985,12 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         recordButton(TextLayer.MAIN, t("poketrade.exchange.refresh"), !workflow.pending(),
                 layout.storageRefresh().x(), layout.storageRefresh().y(),
                 layout.storageRefresh().width(), layout.storageRefresh().height());
+        // [CHANGED] 会话 #21-F Bug 3：原「清空待售」改为一键展开/一键收起（常亮，无灰置条件）
         PeStyle.buttonBg(g, layout.storageClear().x(), layout.storageClear().y(),
                 layout.storageClear().width(), layout.storageClear().height(),
-                !sellQueue.isEmpty(), false,
+                true, false,
                 layout.storageClear().contains(x, y), this.leftPos + x, this.topPos + y);
-        recordButton(TextLayer.MAIN, t("poketrade.exchange.cart.clear"), !sellQueue.isEmpty(),
+        recordButton(TextLayer.MAIN, expandCollapseLabel(), true,
                 layout.storageClear().x(), layout.storageClear().y(),
                 layout.storageClear().width(), layout.storageClear().height());
         boolean depositEnabled = storage.getSelectedStorageId() != null
@@ -2763,6 +4002,27 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
         recordButton(TextLayer.MAIN, t("poketrade.exchange.deposit"), depositEnabled,
                 layout.storageDeposit().x(), layout.storageDeposit().y(),
                 layout.storageDeposit().width(), layout.storageDeposit().height());
+        // [CHANGED] 会话 #21-D：一键存入按钮悬停说明——功能此前已存在（服务端自动找槽 +
+        // 装满自动溢流到下一个可存仓储），但文案「存入」不达意，玩家误以为只能逐格手动存入。
+        if (depositEnabled && layout.storageDeposit().contains(x, y)) {
+            List<Component> depositTip = List.of(
+                    Component.translatable("poketrade.exchange.deposit.tip"));
+            g.renderTooltip(this.font, depositTip, java.util.Optional.empty(),
+                    this.leftPos + x, this.topPos + y);
+        }
+        // [CHANGED] 会话 #21-E：排序按钮 —— 点击循环切换排序档（距离/放置时间升/降/标记正/倒序），
+        // 悬停 tooltip 说明当前档位含义。
+        ExchangeUiModel.Rect sortCtrl = layout.storageSort();
+        boolean sortHover = sortCtrl.contains(x, y);
+        PeStyle.buttonBg(g, sortCtrl.x(), sortCtrl.y(), sortCtrl.width(), sortCtrl.height(),
+                true, false, sortHover, this.leftPos + x, this.topPos + y);
+        recordButton(TextLayer.MAIN, this.font.plainSubstrByWidth(sortModeLabel(),
+                        Math.max(8, sortCtrl.width() - 2)),
+                true, sortCtrl.x(), sortCtrl.y(), sortCtrl.width(), sortCtrl.height());
+        if (sortHover) {
+            g.renderTooltip(this.font, List.of(Component.literal(sortModeTip())),
+                    java.util.Optional.empty(), this.leftPos + x, this.topPos + y);
+        }
     }
 
     private void renderAccordionEntry(GuiGraphics g, AccordionEntry entry, int x, int y) {
@@ -2773,62 +4033,111 @@ public class ExchangeScreen extends AbstractContainerScreen<ExchangeMenu>
             g.fill(header.x() + 1, header.y(), header.right() - 1, header.bottom(), 0x408B6B1B);
         }
         // 只显示容器名称；末影箱带紫色「末」徽标
-        String name = d.displayName();
+        // [CHANGED] 会话 #21-E：同类型容器按放置时间基准标 ①-⑳（末影箱排除），名字后缀标记号，
+        // 便于玩家区分多个同名箱子（"Dev的箱子①" vs "Dev的箱子②"）。
+        String name = displayNameWithMarker(d);
         boolean ender = "vanilla_ender_chest".equals(d.storageId().adapterType());
         int tx = header.x() + 2;
         if (ender) {
-            g.fill(tx, header.y() + 2, tx + 8, header.y() + 10, 0xFF1A1A24);
-            recordText(TextLayer.MAIN, "末", tx + 1, header.y() + 2, 0xFFA98BD6);
+            // [CHANGED] 会话 #24c：徽标本体移到名称之后绘制（见下方），此处仅预留名称起点
+            // 偏移（徽标 8px + 1px 间距），名称左端 leftEdge 右移不压徽标。
             tx += 10;
         }
-        String rowText = this.font.plainSubstrByWidth(name,
-                Math.max(16, header.width() - 20 - (tx - header.x())));
-        recordText(TextLayer.MAIN, rowText, tx, header.y() + 2, PeStyle.TEXT_TITLE);
+        // [CHANGED] 会话 #24d：名称文字 scissor 收窄到 [tx, rightEdge]——左=名称起点、
+        // 右=展开按钮左缘。滚动/静态名称两端在按钮与末影徽标区域外被硬裁，名称永不
+        // 覆盖展开按钮（区域互斥，比后绘 z 轴更彻底）；与外层手风琴 scissor 叠加裁剪。
+        // 徽标与按钮在名称 scissor 之外独立绘制，互不干扰。
+        int availW = Math.max(16, header.width() - 20 - (tx - header.x()));
+        int nameW = this.font.width(name);
+        int rightEdge = header.right() - 15; // 展开按钮左缘 = 名称文字裁剪右边界
+        // [CHANGED] 会话 #24e：enableScissor 是 (x1,y1,x2,y2) 右/底边界语义（非宽高）！
+        // 此前误把 width/height 差值当 x2/y2，负宽/高 → Math.max(0,..) 裁成 0 → 名称整体不显示。
+        // 现传右边界 screenX(rightEdge)、底边界 screenY(header.bottom()) 的绝对屏幕坐标（与外层同款）。
+        g.enableScissor(screenX(tx), screenY(header.y()),
+                screenX(rightEdge), screenY(header.bottom()));
+        if (nameW > availW) {
+            // [CHANGED] 会话 #24c：marqueeX 改为「头追尾」传送带——从基准副本起以
+            // marqueePeriod 为间距循环绘制所有与可见区相交的副本：尾部滚出左缘时头部
+            // 已从右缘进入，全程连续、无空档、无相位归零瞬移。speedMs 60（会话 #24b 调慢）。
+            // [CHANGED] 会话 #21-G Bug 4：跑马灯名称内联绘制（z≈0）。
+            int gap = 24;
+            int period = ExchangeUiModel.marqueePeriod(nameW, gap);
+            int mx = ExchangeUiModel.marqueeX(System.currentTimeMillis(), 60,
+                    nameW, gap, tx, rightEdge);
+            for (int xx = mx; xx < rightEdge; xx += period) {
+                if (xx + nameW > tx) {
+                    g.drawString(this.font, name, xx, header.y() + 2, PeStyle.TEXT_TITLE, true);
+                }
+            }
+        } else {
+            g.drawString(this.font, this.font.plainSubstrByWidth(name, availW),
+                    tx, header.y() + 2, PeStyle.TEXT_TITLE, true);
+        }
+        g.disableScissor();
+        // [CHANGED] 会话 #24d：末影箱「末」徽标绘制在名称 scissor 之外（[header.x(), tx]
+        // 独立区域——名称文字被收窄 scissor 裁在 tx，永远到不了徽标区）。仍为内联绘制。
+        if (ender) {
+            int bx = header.x() + 2;
+            g.fill(bx, header.y() + 2, bx + 8, header.y() + 10, 0xFF1A1A24);
+            g.drawString(this.font, "末", bx + 1, header.y() + 2, 0xFFA98BD6, true);
+        }
         // 展开/收起按钮（表头右侧）
         String arrow = entry.expanded() ? "▾" : "▸";
         PeStyle.buttonBg(g, header.right() - 15, header.y() + 1, 13, 10,
                 true, false, header.contains(x, y) && x >= header.right() - 15,
                 this.leftPos + x, this.topPos + y);
-        recordButton(TextLayer.MAIN, arrow, true,
+        // [CHANGED] 会话 #24：箭头改内联 g.drawString（z≈0、随表头 scissor 裁剪）。
+        // 此前 recordButton(MAIN) 经 drawPendingText（disableScissor 之后）以 z=160 重放、
+        // 不受手风琴裁剪——列表滚动时滚出裁剪区的箭头残留在屏上，与下方箱子的表头/
+        // 展开按钮/网格叠印穿模（即用户所见“名称文字覆盖了旁边的展开”）。内联后与
+        // 名称、按钮背景同层（z≈0）且顺序在后（背景→箭头 盖住 名称），被 scissor 正确裁掉。
+        PeStyle.ButtonText bt = PeStyle.buttonText(this.font, arrow, true,
                 header.right() - 15, header.y() + 1, 13, 10);
+        g.drawString(this.font, bt.label(), bt.textX(), bt.textY(), bt.color(), true);
         if (!entry.expanded()) {
             return;
         }
         String key = d.storageId().asString();
-        List<StorageItemSlot> slots = filteredSlots(snapshotsByStorage.get(key));
+        StorageSnapshot snap = snapshotsByStorage.get(key);
+        List<StorageItemSlot> slots = snap == null ? List.of() : filteredSlots(snap);
         ExchangeUiModel.Rect grid = entry.grid();
         int cols = snapshotCols;
         int visibleRows = Math.max(1, grid.height() / SLOT);
-        // [CHANGED] 会话 #11：滚动钳制范围按容器容量（未裁剪行数），否则双箱第 8 排索引不可达（问题 2）。
-        // slots 仍用于画物品与空态文案，与网格行数无关。
-        int totalRows = ExchangeUiModel.accordionContentRows(d.slotCount(), cols);
-        int scroll = Math.max(0, Math.min(entry.gridScroll(),
-                Math.max(0, totalRows - visibleRows)));
-        int start = scroll * cols;
+        // [CHANGED] 会话 #21-F Bug 2：移除每格滚动（scroll 恒为 0）——展开箱显示全部行，
+        // 越界行由手风琴大滑条滚动访问。
+        // slots 仅用于空态文案判定，与槽位寻址渲染无关。
+        // [CHANGED] Bug 2：网格改按存储槽号寻址（gi = 槽位号，空格渲染为空槽）。此前按
+        // 「已占用槽位压缩列表」渲染（slots.get(index)），空格与存储槽位无一一对应，
+        // 拖入空格只能回落服务端自动找槽（表现为自动排列）。槽号寻址后「拖到哪格存进哪格」。
         for (int row = 0; row < visibleRows; row++) {
             for (int col = 0; col < cols; col++) {
-                int index = start + row * cols + col;
+                int gi = row * cols + col;
                 int sx = grid.x() + col * SLOT;
                 int sy = grid.y() + row * SLOT;
                 PeStyle.slot(g, sx, sy);
-                if (index < slots.size()) {
-                    StorageItemSlot slot = slots.get(index);
-                    PendingSell pending = sellQueue.get(slot.slotIndex());
-                    if (pending != null && pending.itemId().equals(slot.itemId())) {
-                        g.fill(sx - 1, sy - 1, sx + 17, sy + 17, 0x338B6B1B);
-                    }
-                    ItemStack stack = toStack(slot);
-                    if (!stack.isEmpty()) {
-                        g.renderItem(stack, sx + 1, sy + 1);
-                        g.renderItemDecorations(this.font, stack, sx + 1, sy + 1);
+                if (snap != null && gi >= 0 && gi < d.slotCount()) {
+                    StorageItemSlot slot = snap.slots().get(gi);
+                    if (slot != null && matchesItemFilter(slot)) {
+                        // [CHANGED] 会话 #19：待售高亮按当前渲染箱子复合键匹配（多箱子一键出售）。
+                        PendingSell pending = sellQueue.get(pendingSellKey(d.storageId(), gi));
+                        if (pending != null && pending.itemId().equals(slot.itemId())) {
+                            g.fill(sx - 1, sy - 1, sx + 17, sy + 17, 0x338B6B1B);
+                        }
+                        ItemStack stack = toStack(slot);
+                        if (!stack.isEmpty()) {
+                            g.renderItem(stack, sx + 1, sy + 1);
+                            g.renderItemDecorations(this.font, stack, sx + 1, sy + 1);
+                        }
                     }
                 }
             }
         }
-        PeStyle.scrollbar(g, grid.right() + 1, grid.y(), grid.height(),
-                totalRows, visibleRows, scroll);
+        // [REMOVED] 会话 #21-F Bug 2：移除每格小滑条（PeStyle.scrollbar）——展开箱显示
+        // 全部行，由手风琴大滑条导航。
         if (slots.isEmpty()) {
-            recordText(TextLayer.MAIN, t("poketrade.gui.empty"),
+            // [CHANGED] 会话 #24：空态提示改内联绘制（z≈0、随 scissor 裁剪），与名称/箭头
+            // 一致，不再经 z=160 的 drawPendingText 浮出裁剪区穿模。
+            g.drawString(this.font, t("poketrade.gui.empty"),
                     grid.x() + 2, grid.y() + 8, PeStyle.TEXT_DIM);
         }
     }

@@ -23,6 +23,8 @@ public class ModCreativeTabs {
                     .icon(() -> new ItemStack(ModBlocks.TRANSMUTATION_TABLE_ITEM.get()))
                     .displayItems((params, output) -> {
                         output.accept(ModBlocks.TRANSMUTATION_TABLE_ITEM.get());
+                        // [CHANGED] 会话 #28：便携式转化桌紧随转化桌方块之后
+                        output.accept(ModItems.PORTABLE_TRANSMUTATION_TABLE.get());
                         output.accept(ModBlocks.CONDENSER_ITEM.get());
                         output.accept(ModItems.ALCHEMICAL_COAL.get());
                         output.accept(ModItems.MOBIUS_FUEL.get());

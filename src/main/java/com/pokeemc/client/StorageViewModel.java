@@ -54,7 +54,19 @@ public final class StorageViewModel {
         /** 空位最多优先（slotCount - usedSlots 降序） */
         FREE_SLOTS,
         /** 最近更新优先（revision 降序） */
-        RECENTLY_UPDATED
+        RECENTLY_UPDATED,
+        /** [CHANGED] 会话 #21-E：放置时间升序（旧→新，createdAtEpochMillis） */
+        CREATED_ASC,
+        /** [CHANGED] 会话 #21-E：放置时间降序（新→旧） */
+        CREATED_DESC,
+        /** [CHANGED] 会话 #21-E：标记正序（同类型按 ① ② ③；跨类型按适配器类型分组） */
+        MARKER_ASC,
+        /** [CHANGED] 会话 #21-E：标记倒序（同类型按 ③ ② ①） */
+        MARKER_DESC,
+        /** [NEW] 会话 #21-H 修订：物品总价值升序（便宜在前；价值 = 槽位数量×可出售单价之和） */
+        VALUE_ASC,
+        /** [NEW] 会话 #21-H 修订：物品总价值降序（值钱在前） */
+        VALUE_DESC
     }
 
     // —— 权限过滤 ——
@@ -116,6 +128,15 @@ public final class StorageViewModel {
     private boolean radiusOverLimit;
     private boolean narrowScreen;
     private boolean scanComplete = true;
+
+    /** [CHANGED] 会话 #21-E：同类型仓储序号标记（storageId.asString() → 1,2,3…）。
+     *  以放置时间升序为基准分配，末影箱（个人容器，唯一）不标号。UI 显示与标记排序共用。 */
+    private Map<String, Integer> markersByStorage = Map.of();
+
+    /** [NEW] 会话 #21-H 修订：每个仓储的物品总价值（storageId.asString() → 可出售总价）。
+     *  由客户端以快照 + 全量出售价表计算后注入，供 {@link SortMode#VALUE_ASC}/{@link SortMode#VALUE_DESC}
+     *  排序使用；未注入的仓储按 0 处理（无快照时垫底/置顶按方向）。 */
+    private Map<String, Long> valueByStorage = Map.of();
 
     /** 每个仓储对当前玩家的有效权限（由服务端/菜单数据注入）。 */
     private Map<StorageId, EnumSet<StoragePermission>> permissionsByStorage = Map.of();
@@ -212,7 +233,28 @@ public final class StorageViewModel {
 
     /** 应用搜索 + 权限过滤 + 稳定排序后的可见仓储列表。 */
     public List<StorageDescriptor> visibleStorages() {
-        return filterAndSort(storages, searchText, filterMode, sortMode, permissionsByStorage);
+        return filterAndSort(storages, searchText, filterMode, sortMode,
+                permissionsByStorage, markersByStorage, valueByStorage);
+    }
+
+    /** [NEW] 会话 #21-H 修订：注入每个仓储的物品总价值表（VALUE 排序用）。 */
+    public void setValueByStorage(Map<String, Long> values) {
+        valueByStorage = values == null ? Map.of() : Map.copyOf(values);
+    }
+
+    /** [NEW] 会话 #21-H 修订：某仓储的当前总价值（未注入按 0）。 */
+    public long valueOf(String storageKey) {
+        return valueByStorage.getOrDefault(storageKey, 0L);
+    }
+
+    /** [CHANGED] 会话 #21-E：重新分配同类型序号标记（按给定有序列表，通常为放置时间升序）。 */
+    public void recomputeMarkers(List<StorageDescriptor> ordered) {
+        markersByStorage = assignMarkers(ordered);
+    }
+
+    /** [CHANGED] 会话 #21-E：当前标记表（storageId.asString() → 序号）；无标记的仓储缺席。 */
+    public Map<String, Integer> getMarkers() {
+        return markersByStorage;
     }
 
     /**
@@ -226,6 +268,36 @@ public final class StorageViewModel {
             FilterMode filterMode,
             SortMode sortMode,
             Map<StorageId, EnumSet<StoragePermission>> permissions) {
+        return filterAndSort(input, searchText, filterMode, sortMode, permissions, Map.of());
+    }
+
+    /**
+     * [CHANGED] 会话 #21-E：标记排序重载。{@code markers} 为同类型序号表
+     * （storageId.asString() → 序号，缺省 0），仅 MARKER_ASC/MARKER_DESC 使用。
+     * [NEW] 会话 #21-H 修订：价值排序重载。{@code values} 为 storageId.asString() → 物品总价值，
+     * 仅 VALUE_ASC/VALUE_DESC 使用（缺省 0）。委托 7 参版本。
+     */
+    public static List<StorageDescriptor> filterAndSort(
+            List<StorageDescriptor> input,
+            String searchText,
+            FilterMode filterMode,
+            SortMode sortMode,
+            Map<StorageId, EnumSet<StoragePermission>> permissions,
+            Map<String, Integer> markers) {
+        return filterAndSort(input, searchText, filterMode, sortMode, permissions, markers, Map.of());
+    }
+
+    /**
+     * [NEW] 会话 #21-H 修订：完整签名——{@code values}（物品总价值表）供 VALUE 排序。
+     */
+    public static List<StorageDescriptor> filterAndSort(
+            List<StorageDescriptor> input,
+            String searchText,
+            FilterMode filterMode,
+            SortMode sortMode,
+            Map<StorageId, EnumSet<StoragePermission>> permissions,
+            Map<String, Integer> markers,
+            Map<String, Long> values) {
         List<StorageDescriptor> result = new ArrayList<>();
         String query = searchText == null ? "" : searchText.trim().toLowerCase();
         for (StorageDescriptor d : input) {
@@ -237,7 +309,16 @@ public final class StorageViewModel {
             }
             result.add(d);
         }
-        result.sort(comparator(sortMode));
+        if (sortMode == SortMode.MARKER_ASC || sortMode == SortMode.MARKER_DESC) {
+            // 标记排序：主键按适配器类型分组，次键按序号标记（无标记=0 在各自类型内最前）。
+            // 倒序时整体反转（类型与标记皆反转）——「标记倒序」= 类型倒序 + 组内 ③②①。
+            Comparator<StorageDescriptor> primary = Comparator
+                    .comparing((StorageDescriptor d) -> d.storageId().adapterType())
+                    .thenComparingInt(d -> markers.getOrDefault(d.storageId().asString(), 0));
+            result.sort(sortMode == SortMode.MARKER_ASC ? primary : primary.reversed());
+        } else {
+            result.sort(comparator(sortMode, values));
+        }
         return Collections.unmodifiableList(result);
     }
 
@@ -246,7 +327,9 @@ public final class StorageViewModel {
             return true;
         }
         return d.displayName().toLowerCase().contains(query)
-                || d.storageId().asString().toLowerCase().contains(query);
+                || d.storageId().asString().toLowerCase().contains(query)
+                || (d.ownerName() != null
+                        && d.ownerName().toLowerCase().contains(query));
     }
 
     /** 权限过滤；ALL 恒通过，其他模式要求当前玩家拥有对应权限。 */
@@ -261,8 +344,16 @@ public final class StorageViewModel {
         return set != null && set.contains(mode.permission());
     }
 
-    /** 稳定排序比较器：主键 + storageId 序列 tie-break。 */
+    /** 稳定排序比较器：主键 + storageId 序列 tie-break（无价值表，VALUE 按 0）。 */
     public static Comparator<StorageDescriptor> comparator(SortMode mode) {
+        return comparator(mode, Map.of());
+    }
+
+    /**
+     * [NEW] 会话 #21-H 修订：稳定排序比较器（带物品总价值表）。{@code values} 缺省按 0 处理。
+     */
+    public static Comparator<StorageDescriptor> comparator(SortMode mode, Map<String, Long> values) {
+        Map<String, Long> val = values == null ? Map.of() : values;
         Comparator<StorageDescriptor> primary;
         switch (mode == null ? SortMode.DISTANCE : mode) {
             case NAME -> primary = Comparator.comparing(d -> d.displayName().toLowerCase());
@@ -270,10 +361,70 @@ public final class StorageViewModel {
                     (StorageDescriptor d) -> d.slotCount() - d.usedSlots()).reversed();
             case RECENTLY_UPDATED -> primary = Comparator.comparingLong(
                     StorageDescriptor::revision).reversed();
+            // [CHANGED] 会话 #21-E：放置时间升/降序（createdAtEpochMillis）
+            case CREATED_ASC -> primary = Comparator.comparingLong(StorageDescriptor::createdAtEpochMillis);
+            case CREATED_DESC -> primary = Comparator.comparingLong(
+                    StorageDescriptor::createdAtEpochMillis).reversed();
+            // 标记排序的完整语义（跨类型分组 + 序号）在 filterAndSort 实现；
+            // 此处作为独立比较器的兜底：仅按适配器类型分组（无序号维度）。
+            case MARKER_ASC -> primary = Comparator.comparing(
+                    (StorageDescriptor d) -> d.storageId().adapterType());
+            case MARKER_DESC -> primary = Comparator.comparing(
+                    (StorageDescriptor d) -> d.storageId().adapterType()).reversed();
+            // [NEW] 会话 #21-H 修订：物品总价值升/降序（无快照/无价物品按 0）
+            case VALUE_ASC -> primary = Comparator.comparingLong(
+                    (StorageDescriptor d) -> val.getOrDefault(d.storageId().asString(), 0L));
+            case VALUE_DESC -> primary = Comparator.comparingLong(
+                    (StorageDescriptor d) -> val.getOrDefault(d.storageId().asString(), 0L)).reversed();
             case DISTANCE -> primary = Comparator.comparingInt(StorageDescriptor::distance);
             default -> throw new IllegalStateException("unknown sort mode " + mode);
         }
         return primary.thenComparing(d -> d.storageId().asString());
+    }
+
+    // ================= 同类型序号标记（会话 #21-E） =================
+
+    /** 末影箱适配器类型 ID（个人容器，唯一，不标号）。 */
+    static final String ENDER_CHEST_TYPE = "vanilla_ender_chest";
+
+    /**
+     * 按给定有序列表为同类型仓储分配序号标记（1,2,3…）：同适配器类型按列表顺序标号，
+     * 末影箱排除（个人容器全局唯一）。纯函数，便于测试。
+     */
+    public static Map<String, Integer> assignMarkers(List<StorageDescriptor> ordered) {
+        Map<String, Integer> markers = new LinkedHashMap<>();
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        if (ordered == null) {
+            return Collections.unmodifiableMap(markers);
+        }
+        for (StorageDescriptor d : ordered) {
+            String type = d.storageId().adapterType();
+            if (ENDER_CHEST_TYPE.equals(type)) {
+                continue;
+            }
+            int n = counts.merge(type, 1, Integer::sum);
+            markers.put(d.storageId().asString(), n);
+        }
+        return Collections.unmodifiableMap(markers);
+    }
+
+    /** 序号 → 显示标记（①-⑳ 全角圈号；超 20 回退 "#n"）。 */
+    public static String markerLabel(int n) {
+        if (n <= 0) {
+            return "";
+        }
+        if (n <= 20) {
+            return Character.toString((char) (0x2460 + n - 1));
+        }
+        return "#" + n;
+    }
+
+    /** 以放置时间升序（旧→新）为基准的稳定排列（标记分配基准 + CREATED_ASC 排序）。 */
+    public static List<StorageDescriptor> byCreatedAsc(List<StorageDescriptor> input) {
+        List<StorageDescriptor> out = new ArrayList<>(input);
+        out.sort(Comparator.comparingLong(StorageDescriptor::createdAtEpochMillis)
+                .thenComparing(d -> d.storageId().asString()));
+        return Collections.unmodifiableList(out);
     }
 
     // ================= 窄屏收起 =================

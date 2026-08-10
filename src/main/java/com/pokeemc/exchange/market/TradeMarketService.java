@@ -1,6 +1,7 @@
 package com.pokeemc.exchange.market;
 
 import com.pokeemc.PokeEMC;
+import com.pokeemc.exchange.history.SalesHistory;
 import com.pokeemc.config.PokeTradeConfig;
 import com.pokeemc.economy.PixelmonWallet;
 import com.pokeemc.exchange.price.ExchangePriceService;
@@ -248,6 +249,8 @@ public final class TradeMarketService implements MarketTradeService {
         }
         carried.shrink(line.count());
         menu.broadcastChanges();
+        // [NEW] 会话 #21-H 修订：成功出售 → 记入该玩家学习模式出售历史
+        SalesHistory.record(player.getUUID(), line.itemId());
         return TradeResult.SUCCESS;
     }
 
@@ -331,6 +334,10 @@ public final class TradeMarketService implements MarketTradeService {
         }
         TradeResult result = TradeResult.SUCCESS;
         idempotent.put(key, result);
+        // [NEW] 会话 #21-H 修订：成功出售 → 记入该玩家学习模式出售历史（逐行记录，集合去重）
+        for (CartLine line : validated) {
+            SalesHistory.record(playerId, line.itemId());
+        }
         return result;
     }
 

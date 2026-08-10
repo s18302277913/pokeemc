@@ -18,6 +18,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
+import net.minecraft.world.level.block.entity.ShulkerBoxBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.ChestType;
 import net.neoforged.neoforge.gametest.GameTestHolder;
@@ -240,6 +241,57 @@ public class StorageAdapterGameTests {
             h.commitExtract(1, "minecraft:dirt", 2);
             check(h.count(1) == 3, "extract must reduce the output slot");
         }
+
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty", templateNamespace = "poketrade", batch = BATCH, timeoutTicks = 200)
+    public void shulkerBoxAdaptersMatchByColorAndExpose27Slots(GameTestHelper helper) {
+        // 会话 #15：潜影盒适配器（素盒 + 16 色）按颜色互斥匹配，容量固定 27。
+        ServerLevel level = helper.getLevel();
+        String dim = level.dimension().location().toString();
+        StorageAdapterRegistryImpl registry = StorageServices.registry();
+
+        BlockPos redRel = new BlockPos(1, 1, 1);
+        helper.setBlock(redRel, Blocks.RED_SHULKER_BOX);
+        BlockPos redAbs = helper.absolutePos(redRel);
+
+        StorageAdapter redAdapter = adapter(registry, "vanilla_red_shulker_box");
+        check(redAdapter.supports(ctxOf(dim, "vanilla_red_shulker_box", redAbs)),
+                "red shulker adapter must support a red shulker box");
+        // 互斥：其他颜色适配器不匹配红色
+        check(!adapter(registry, "vanilla_blue_shulker_box")
+                        .supports(ctxOf(dim, "vanilla_blue_shulker_box", redAbs)),
+                "blue shulker adapter must not match a red shulker box");
+        try (StorageHandleExt h = (StorageHandleExt) redAdapter.open(
+                ctxOf(dim, "vanilla_red_shulker_box", redAbs)).orElseThrow()) {
+            check(h.slotCount() == 27, "shulker box must expose 27 slots");
+        }
+        ShulkerBoxBlockEntity shulker = (ShulkerBoxBlockEntity) level.getBlockEntity(redAbs);
+        check(shulker != null && shulker.getContainerSize() == 27,
+                "shulker box block entity must report 27 container slots");
+
+        // 素盒适配器只匹配素盒
+        BlockPos plainRel = new BlockPos(3, 1, 1);
+        helper.setBlock(plainRel, Blocks.SHULKER_BOX);
+        BlockPos plainAbs = helper.absolutePos(plainRel);
+        StorageAdapter plainAdapter = adapter(registry, "vanilla_shulker_box");
+        check(plainAdapter.supports(ctxOf(dim, "vanilla_shulker_box", plainAbs)),
+                "plain shulker adapter must support a plain shulker box");
+        check(!redAdapter.supports(ctxOf(dim, "vanilla_red_shulker_box", plainAbs)),
+                "red shulker adapter must not match a plain shulker box");
+
+        // 抽样互斥：白色 vs 红色 vs 素盒
+        BlockPos whiteRel = new BlockPos(5, 1, 1);
+        helper.setBlock(whiteRel, Blocks.WHITE_SHULKER_BOX);
+        BlockPos whiteAbs = helper.absolutePos(whiteRel);
+        StorageAdapter whiteAdapter = adapter(registry, "vanilla_white_shulker_box");
+        check(whiteAdapter.supports(ctxOf(dim, "vanilla_white_shulker_box", whiteAbs)),
+                "white shulker adapter must support a white shulker box");
+        check(!redAdapter.supports(ctxOf(dim, "vanilla_red_shulker_box", whiteAbs)),
+                "red shulker adapter must not match a white shulker box");
+        check(!plainAdapter.supports(ctxOf(dim, "vanilla_shulker_box", whiteAbs)),
+                "plain shulker adapter must not match a dyed shulker box");
 
         helper.succeed();
     }

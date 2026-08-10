@@ -2,6 +2,7 @@ package com.pokeemc.exchange;
 
 import com.pokeemc.economy.PixelmonWallet;
 import com.pokeemc.config.PokeTradeConfig;
+import com.pokeemc.exchange.history.SalesHistory;
 import com.pokeemc.exchange.price.ExchangePriceService;
 import com.pokeemc.storage.StorageAccessService;
 import com.pokeemc.storage.StorageKey;
@@ -427,6 +428,19 @@ public final class ExchangeService {
                     rs.record().displayName() + " 出售 " + perStorageItems.get(rs.storageId())
                             + " 共 " + count + " 件 / " + amount + " PKM（批次 "
                             + sessionId + "/" + operationId + "）").id();
+        }
+        // [NEW] 会话 #21-H 修订：全部 commit 成功 → 记入该玩家学习模式出售历史（槽位取 itemId，
+        // 集合去重；非法 id 防御忽略）。置于 closeAll 之前，句柄仍可读槽位。
+        for (ResolvedEntry re : resolved) {
+            String itemId = re.storage().handle().itemId(re.entry().slotIndex());
+            if (itemId == null) {
+                continue;
+            }
+            try {
+                SalesHistory.record(actorId, TradeItemId.parse(itemId));
+            } catch (IllegalArgumentException ignored) {
+                // 理论上已在校验期 parse 通过；防御异常不中断出售结果
+            }
         }
         closeAll(storages);
 

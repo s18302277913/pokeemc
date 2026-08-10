@@ -43,6 +43,16 @@ class StorageRecordTest {
     }
 
     @Test
+    void withOwnerNameUpdatesOnlyOwnerName() {
+        StorageRecord record = StorageRecord.create(OWNER, "末影箱", NOW)
+                .withOwnerName("Alice");
+        assertEquals("Alice", record.ownerName());
+        assertEquals("末影箱", record.displayName());
+        assertEquals(OWNER, record.ownerId());
+        assertEquals(1, record.revision());
+    }
+
+    @Test
     void withGrantAddsAndPreservesOthers() {
         StorageRecord record = StorageRecord.create(OWNER, "Alice", NOW)
                 .withGrant(PLAYER,

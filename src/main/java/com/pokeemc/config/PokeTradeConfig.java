@@ -3,6 +3,10 @@ package com.pokeemc.config;
 import com.pokeemc.storage.discovery.StorageConfig;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
 /**
  * PokeTrade 服务端配置（NeoForge {@code ModConfigSpec}，写入
  * {@code config/poketrade-server.toml}，随存档 serverconfig 持久化）。
@@ -27,6 +31,18 @@ public final class PokeTradeConfig {
         OFF, LEFT, RIGHT
     }
 
+    /** [CHANGED] 会话 #21-C：一键出售(仓储右上角按钮)的作用域。ALL=出售全部可售仓储的快照；
+     *  EXPANDED=仅出售当前展开列表中的可售仓储（默认，等价旧行为）。弹窗选中的模式写回本配置。 */
+    public enum SellWholeMode {
+        ALL, EXPANDED
+    }
+
+    /** [NEW] 会话 #21-H：交易所目录模式。LEARNING=仅显示可出售物品（有卖价 且 不在禁止出售名单/通过白名单）；
+     *  FULL=显示全部有价条目（含仅可买入，sellPrice=0）。默认 LEARNING，全局服务端生效。 */
+    public enum ExchangeMode {
+        LEARNING, FULL
+    }
+
     /** 完整服务端配置规格（模组构造阶段注册到 {@code ModLoadingContext}）。 */
     public static final ModConfigSpec SPEC;
 
@@ -35,6 +51,16 @@ public final class PokeTradeConfig {
     public static final ModConfigSpec CLIENT_SPEC;
     /** [CHANGED] 会话 #10：Shift 直接贩卖归属键（私有，仅经 {@link #shiftSellHand()} 读取）。 */
     private static final ModConfigSpec.EnumValue<ShiftSellHand> SHIFT_SELL_HAND;
+    /** [CHANGED] 会话 #21-C：一键出售默认作用域（ALL/EXPANDED），弹窗选择后写回。 */
+    private static final ModConfigSpec.EnumValue<SellWholeMode> SELL_WHOLE_MODE;
+    /** [CHANGED] 会话 #21-C：一键出售前是否弹出模式选择确认（false=直接按默认模式出售）。 */
+    private static final ModConfigSpec.BooleanValue SELL_WHOLE_CONFIRM;
+    /** [CHANGED] 会话 #21-D：仓储扫描半径档位（点击切换后持久化，重进交易所恢复）。 */
+    private static final ModConfigSpec.IntValue STORAGE_RADIUS;
+    /** [CHANGED] 会话 #21-G：交易所仓储列表展开/收起状态（storageId 字符串列表）。
+     *  与半径档位一致：点击各箱展开/收起或「一键展开/收起」后写回，重进交易所恢复。
+     *  空列表=首次使用（交易所默认全部展开，随后继承玩家选择）。 */
+    private static final ModConfigSpec.ConfigValue<List<String>> EXPANDED_STORAGES;
 
     // ------------------------------------------------------------ storage 组
 
@@ -73,6 +99,8 @@ public final class PokeTradeConfig {
     public static final ModConfigSpec.IntValue EXCHANGE_SELL_MULTIPLIER_PERCENT;
     /** 贵重物品二次确认阈值（PKM）。 */
     public static final ModConfigSpec.LongValue EXCHANGE_SELL_CONFIRM_VALUE;
+    /** [NEW] 会话 #21-H：交易所目录模式（学习/全高亮），默认学习模式。 */
+    private static final ModConfigSpec.EnumValue<ExchangeMode> EXCHANGE_MODE;
 
     // ------------------------------------------------------------ trade 组
 
@@ -142,6 +170,14 @@ public final class PokeTradeConfig {
         EXCHANGE_SELL_CONFIRM_VALUE = builder
                 .comment("贵重物品二次确认阈值（PKM），默认 100000")
                 .defineInRange("sellConfirmValue", 100_000L, 0L, Long.MAX_VALUE / 2);
+        // [NEW] 会话 #21-H：交易所目录模式。指令 /poketrade exchange mode <learning|full> 切换后
+        // 写回此处；ExchangeCatalogPacket.handle 应答时按模式实时过滤目录（不重建 PriceCatalog）。
+        EXCHANGE_MODE = builder
+                .comment("交易所目录模式",
+                        "LEARNING=仅显示可出售物品（有卖价 且 不在禁止出售名单/通过白名单）",
+                        "FULL=显示全部有价条目（含仅可买入，sellPrice=0）",
+                        "默认: LEARNING")
+                .defineEnum("exchangeMode", ExchangeMode.LEARNING);
         builder.pop();
 
         builder.push("trade");
@@ -160,12 +196,37 @@ public final class PokeTradeConfig {
 
         // [CHANGED] 会话 #10：客户端配置（Shift 直接贩卖归属键）。独立 builder 构建，
         // 与服务端 SPEC 同块初始化，避免 getter 引用顺序混乱。
+        // [CHANGED] 会话 #21-C：追加一键出售默认作用域与确认弹窗开关。
         ModConfigSpec.Builder clientBuilder = new ModConfigSpec.Builder();
         SHIFT_SELL_HAND = clientBuilder
                 .comment("Shift 直接贩卖归属键",
                         "OFF=关闭 / LEFT=左Shift贩卖(背包)、右Shift保持原版(仓储取出/快移) / RIGHT=反向",
                         "默认: LEFT")
                 .defineEnum("shiftSellHand", ShiftSellHand.LEFT);
+        SELL_WHOLE_MODE = clientBuilder
+                .comment("一键出售(仓储右上角按钮)的作用域",
+                        "ALL=出售全部可售仓储的快照 / EXPANDED=仅出售当前展开列表中的可售仓储",
+                        "弹窗选择后写回此处；默认: EXPANDED")
+                .defineEnum("sellWholeMode", SellWholeMode.EXPANDED);
+        SELL_WHOLE_CONFIRM = clientBuilder
+                .comment("一键出售前是否弹出模式选择确认弹窗",
+                        "false=勾选'不再提示'后直接按默认作用域出售；可在本配置恢复",
+                        "默认: true")
+                .define("sellWholeConfirm", true);
+        // [CHANGED] 会话 #21-D：仓储扫描半径档位（交易所左栏范围按钮），点击切换后写回
+        // 此处，重进交易所恢复上次档位。取值须落在 ExchangeUiModel.STORAGE_RADIUS_STEPS。
+        STORAGE_RADIUS = clientBuilder
+                .comment("交易所仓储扫描半径（方块）",
+                        "左栏范围按钮点击切换的档位持久化到此；重进交易所恢复",
+                        "默认: 16")
+                .defineInRange("storageRadius", 16, 16, 1024);
+        // [CHANGED] 会话 #21-G：仓储列表展开/收起状态继承。storageId 字符串列表，
+        // 点击各箱展开/收起或「一键展开/收起」后写回；空=首次使用（默认全部展开）。
+        EXPANDED_STORAGES = clientBuilder
+                .comment("交易所仓储列表展开/收起状态（storageId 列表）",
+                        "点击展开/收起后写回，重进交易所恢复上次状态",
+                        "默认: 空（首次使用=全部展开）")
+                .define("expandedStorages", List.<String>of());
         CLIENT_SPEC = clientBuilder.build();
     }
 
@@ -218,6 +279,19 @@ public final class PokeTradeConfig {
         return SPEC.isLoaded() ? EXCHANGE_SELL_CONFIRM_VALUE.get() : 100_000L;
     }
 
+    /** [NEW] 会话 #21-H：交易所目录模式（spec 未加载时回退默认 {@link ExchangeMode#LEARNING}）。 */
+    public static ExchangeMode exchangeMode() {
+        return SPEC.isLoaded() ? EXCHANGE_MODE.get() : ExchangeMode.LEARNING;
+    }
+
+    /** [NEW] 会话 #21-H：写回交易所目录模式（指令切换后调用；配置未加载时忽略 no-op）。 */
+    public static void setExchangeMode(ExchangeMode mode) {
+        if (SPEC.isLoaded()) {
+            EXCHANGE_MODE.set(mode);
+            EXCHANGE_MODE.save();
+        }
+    }
+
     /** 玩家交易总开关（未加载时回退默认 {@code true}）。 */
     public static boolean tradeEnabled() {
         return !SPEC.isLoaded() || TRADE_ENABLED.get();
@@ -237,5 +311,59 @@ public final class PokeTradeConfig {
      *  时回退默认 {@link ShiftSellHand#LEFT}。 */
     public static ShiftSellHand shiftSellHand() {
         return CLIENT_SPEC.isLoaded() ? SHIFT_SELL_HAND.get() : ShiftSellHand.LEFT;
+    }
+
+    /** [CHANGED] 会话 #21-C：一键出售默认作用域，spec 未加载时回退 {@link SellWholeMode#EXPANDED}。 */
+    public static SellWholeMode sellWholeMode() {
+        return CLIENT_SPEC.isLoaded() ? SELL_WHOLE_MODE.get() : SellWholeMode.EXPANDED;
+    }
+
+    /** [CHANGED] 会话 #21-C：一键出售确认弹窗开关，spec 未加载时回退 true。 */
+    public static boolean sellWholeConfirm() {
+        return !CLIENT_SPEC.isLoaded() || SELL_WHOLE_CONFIRM.get();
+    }
+
+    /** [CHANGED] 会话 #21-C：写回一键出售默认作用域（弹窗选择后调用；配置未加载时忽略）。 */
+    public static void setSellWholeMode(SellWholeMode mode) {
+        if (CLIENT_SPEC.isLoaded()) {
+            SELL_WHOLE_MODE.set(mode);
+            SELL_WHOLE_MODE.save();
+        }
+    }
+
+    /** [CHANGED] 会话 #21-C：写回确认弹窗开关（勾选/取消'不再提示'时调用）。 */
+    public static void setSellWholeConfirm(boolean confirm) {
+        if (CLIENT_SPEC.isLoaded()) {
+            SELL_WHOLE_CONFIRM.set(confirm);
+            SELL_WHOLE_CONFIRM.save();
+        }
+    }
+
+    /** [CHANGED] 会话 #21-D：仓储扫描半径（方块），spec 未加载时回退默认 16。 */
+    public static int storageRadius() {
+        return CLIENT_SPEC.isLoaded() ? STORAGE_RADIUS.get() : 16;
+    }
+
+    /** [CHANGED] 会话 #21-D：写回仓储扫描半径（范围按钮点击切换后调用，重进恢复）。 */
+    public static void setStorageRadius(int radius) {
+        if (CLIENT_SPEC.isLoaded()) {
+            STORAGE_RADIUS.set(radius);
+            STORAGE_RADIUS.save();
+        }
+    }
+
+    /** [CHANGED] 会话 #21-G：已保存的仓储展开/收起状态（storageId 列表）；spec 未加载或
+     *  首次使用时返回空列表（=交易所默认全部展开，对齐 #21-F）。 */
+    public static List<String> expandedStorages() {
+        return CLIENT_SPEC.isLoaded() ? new ArrayList<>(EXPANDED_STORAGES.get()) : List.of();
+    }
+
+    /** [CHANGED] 会话 #21-G：写回仓储展开/收起状态（展开/收起切换后调用，重进交易所恢复，
+     *  与范围档位 `setStorageRadius` 的 set()+save() 模式一致）。 */
+    public static void setExpandedStorages(Collection<String> ids) {
+        if (CLIENT_SPEC.isLoaded()) {
+            EXPANDED_STORAGES.set(new ArrayList<>(ids));
+            EXPANDED_STORAGES.save();
+        }
     }
 }

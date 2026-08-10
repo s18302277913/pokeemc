@@ -21,6 +21,7 @@ import com.pokeemc.storage.StorageAutomationGuard;
 import com.pokeemc.storage.StorageCommands;
 import com.pokeemc.storage.StorageProtectionEvents;
 import com.pokeemc.storage.StorageServices;
+import com.pokeemc.exchange.command.ExchangeModeCommand;
 import com.pokeemc.thirdparty.CapabilityCommand;
 import com.pokeemc.thirdparty.ThirdPartyServices;
 import com.pokeemc.trade.command.TradeCommand;
@@ -101,6 +102,9 @@ public class PokeEMC {
 
         // Task 9/10：玩家交易命令入口（/poketrade trade ...）
         NeoForge.EVENT_BUS.addListener(TradeCommand::register);
+
+        // [NEW] 会话 #21-H：交易所目录模式切换（/poketrade exchange mode <learning|full>）
+        NeoForge.EVENT_BUS.addListener(ExchangeModeCommand::register);
 
         // Task 7 交易崩溃恢复：启动恢复 + 登录交付 + 定时过期扫描（实例由 Task 11 注入）
         NeoForge.EVENT_BUS.addListener(this::onPlayerLoggedIn);

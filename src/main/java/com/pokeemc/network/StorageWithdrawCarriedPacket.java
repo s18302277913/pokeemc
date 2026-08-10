@@ -151,6 +151,10 @@ public record StorageWithdrawCarriedPacket(
                     "withdraw not allowed");
         }
         if (packet.expectedRevision() >= 0 && packet.expectedRevision() != record.revision()) {
+            // [CHANGED] 会话 #21-F Bug 1 诊断：记录 revision 冲突明细（客户端预期 vs 服务端实际）
+            PokeEMC.LOGGER.warn("[storage-diag] withdraw revision_conflict storageId={} "
+                            + "expected={} actual={}",
+                    packet.storageId().asString(), packet.expectedRevision(), record.revision());
             return new StorageMovePacket.Response(packet.sessionId(), false, "revision_conflict",
                     "storage changed; refresh and retry");
         }
@@ -176,11 +180,24 @@ public record StorageWithdrawCarriedPacket(
             String itemId = ext.itemId(packet.slotIndex());
             int count = ext.count(packet.slotIndex());
             if (itemId == null || count <= 0) {
+                // [CHANGED] 会话 #21-F Bug 1 诊断：槽位实际为空（客户端快照仍显示有物品）
+                PokeEMC.LOGGER.warn("[storage-diag] withdraw source_empty storageId={} slot={} "
+                                + "clientFp={} item={} count={}",
+                        packet.storageId().asString(), packet.slotIndex(),
+                        packet.fingerprint(), itemId, count);
                 return new StorageMovePacket.Response(packet.sessionId(), false, "source_empty",
                         "source slot is empty");
             }
             if (packet.fingerprint() != 0
                     && ext.fingerprint(packet.slotIndex()) != packet.fingerprint()) {
+                // [CHANGED] 会话 #21-F Bug 1 诊断：指纹不匹配——二次读取检测「指纹不稳定」
+                //（若 fpNow != fpAgain，即使快照新鲜也会被拒，非刷新问题）。
+                long fpNow = ext.fingerprint(packet.slotIndex());
+                long fpAgain = ext.fingerprint(packet.slotIndex());
+                PokeEMC.LOGGER.warn("[storage-diag] withdraw content_changed storageId={} slot={} "
+                                + "clientFp={} serverFpNow={} serverFpAgain={} (unstable={}) item={}x{}",
+                        packet.storageId().asString(), packet.slotIndex(), packet.fingerprint(),
+                        fpNow, fpAgain, fpNow != fpAgain, itemId, count);
                 return new StorageMovePacket.Response(packet.sessionId(), false, "content_changed",
                         "slot content changed");
             }

@@ -26,8 +26,13 @@ import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 @EventBusSubscriber(modid = PokeEMC.MODID) // [CHANGED] 官方 API：NeoForge 依 IModBusEvent 自动路由 mod bus，bus 属性已 [removal]
 public class ModNetwork {
 
-    /** 协议版本：增加不兼容 C2S/S2C 包或语义变更时递增（Task 8 从笼统 "2" 整理为常量） */
-    public static final String PROTOCOL_VERSION = "3";
+    /** 协议版本：增加不兼容 C2S/S2C 包或语义变更时递增（Task 8 从笼统 "2" 整理为常量）。
+     *  [BREAKING CHANGES] 会话 #16：目录 Response 追加 catalogVersion/truncated 字段 +
+     *  新增 CatalogChangedPacket（S2C） → 4。
+     *  [BREAKING CHANGES] 会话 #21-H：目录 Response 追加 mode 字段（学习/全高亮模式） → 5。 */
+    // [CHANGED] 会话 #21-H 修订：Response 追加 sellPrices 字段（全量出售价表）为 wire 破坏性变更，5 → 6
+    // [CHANGED] 会话 #29：新增 StorageChangedPacket（S2C 空载荷） → 7
+    public static final String PROTOCOL_VERSION = "7";
 
     @SubscribeEvent
     public static void register(final RegisterPayloadHandlersEvent event) {
@@ -36,6 +41,8 @@ public class ModNetwork {
         registrar.playToServer(SetCondenserTargetPacket.TYPE, SetCondenserTargetPacket.STREAM_CODEC, SetCondenserTargetPacket::handle);
         registrar.playToServer(StorageMovePacket.TYPE, StorageMovePacket.STREAM_CODEC, StorageMovePacket::handle);
         registrar.playToServer(StorageSellPacket.TYPE, StorageSellPacket.STREAM_CODEC, StorageSellPacket::handle);
+        // 会话 #16：仓储批量操作（右键菜单批量取出/批量出售）
+        registrar.playToServer(StorageBatchPacket.TYPE, StorageBatchPacket.STREAM_CODEC, StorageBatchPacket::handle);
         registrar.playToServer(StorageDepositPacket.TYPE, StorageDepositPacket.STREAM_CODEC, StorageDepositPacket::handle);
         registrar.playToServer(StorageDepositCarriedPacket.TYPE,
                 StorageDepositCarriedPacket.STREAM_CODEC, StorageDepositCarriedPacket::handle);
@@ -60,6 +67,10 @@ public class ModNetwork {
                 ExchangeCatalogPacket.Request.STREAM_CODEC, ExchangeCatalogPacket::handle);
         registrar.playToClient(ExchangeCatalogPacket.Response.TYPE,
                 ExchangeCatalogPacket.Response.STREAM_CODEC, ExchangeCatalogPacket::handleResponse);
+        // 会话 #16：目录变更推送（S2C，服务端 rebuild 后通知开着的屏幕重新拉取）
+        registrar.playToClient(CatalogChangedPacket.TYPE, CatalogChangedPacket.STREAM_CODEC, CatalogChangedPacket::handle);
+        // 会话 #29：仓储列表失效通知（S2C 空载荷，容器放置/破坏后广播）
+        registrar.playToClient(StorageChangedPacket.TYPE, StorageChangedPacket.STREAM_CODEC, StorageChangedPacket::handle);
         registrar.playToServer(ExchangeBuyPacket.TYPE, ExchangeBuyPacket.STREAM_CODEC, ExchangeBuyPacket::handle);
         registrar.playToServer(ExchangeSellPacket.TYPE, ExchangeSellPacket.STREAM_CODEC, ExchangeSellPacket::handle);
         // 阶段 4 Task 8：玩家交易 C2S（每操作一个 payload）

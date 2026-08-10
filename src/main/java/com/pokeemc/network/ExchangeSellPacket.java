@@ -3,10 +3,10 @@ package com.pokeemc.network;
 import com.pokeemc.PokeEMC;
 import com.pokeemc.exchange.market.TradeMarketService;
 import com.pokeemc.menu.ExchangeMenu;
+import com.pokeemc.storage.adapter.PokeballIdentity;
 import com.poketrade.api.TradeItemId;
 import com.poketrade.api.TradeResult;
 import com.poketrade.api.market.MarketTradeService.CartLine;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
@@ -100,9 +100,11 @@ public record ExchangeSellPacket(String sessionId, String operationId, List<Line
                 ItemStack carried = menu.getCarried();
                 if (lines.size() == 1 && !carried.isEmpty()) {
                     CartLine line = lines.get(0);
-                    ResourceLocation rl = BuiltInRegistries.ITEM.getKey(carried.getItem());
-                    TradeItemId carriedId = rl == null ? null
-                            : new TradeItemId(rl.getNamespace(), rl.getPath());
+                    // [CHANGED] 会话 #19：携带栈匹配必须经 PokeballIdentity.encode 编码球种——
+                    // 注册表键对球坍缩为 pixelmon:poke_ball，与请求的球种键永不相等 → 误走
+                    // sellFromInventory 从背包扣「有堆叠的球」而非鼠标携带的那格（玩家复反馈）。
+                    String carriedKey = PokeballIdentity.encode(carried);
+                    TradeItemId carriedId = carriedKey == null ? null : TradeItemId.parse(carriedKey);
                     if (carriedId != null && carriedId.equals(line.itemId())
                             && line.count() > 0 && line.count() <= carried.getCount()) {
                         result = TradeMarketService.forServer().sellFromCarried(player, menu, line);

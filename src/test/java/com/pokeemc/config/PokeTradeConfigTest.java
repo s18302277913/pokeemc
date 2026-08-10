@@ -49,4 +49,28 @@ class PokeTradeConfigTest {
         // shiftSellHand() 必须回退默认 LEFT，不得抛 IllegalStateException。
         assertEquals(PokeTradeConfig.ShiftSellHand.LEFT, PokeTradeConfig.shiftSellHand());
     }
+
+    // ===== [NEW] 会话 #21-H：交易所目录模式（exchange.exchangeMode） =====
+
+    @Test
+    void exchangeModeFallsBackToLearningWhenSpecUnloaded() {
+        // [NEW] 会话 #21-H：服务端 SPEC 未加载（纯 JUnit）时 exchangeMode() 必须回退默认 LEARNING，
+        // 不得抛 IllegalStateException——学习模式是默认目录模式，任何环境都不能丢失该默认。
+        assertEquals(PokeTradeConfig.ExchangeMode.LEARNING, PokeTradeConfig.exchangeMode());
+    }
+
+    @Test
+    void setExchangeModeNoOpsWhenSpecUnloaded() {
+        // [NEW] 会话 #21-H：SPEC 未加载时 setExchangeMode 是 no-op（不得抛异常），读取仍回退 LEARNING。
+        PokeTradeConfig.setExchangeMode(PokeTradeConfig.ExchangeMode.FULL);
+        assertEquals(PokeTradeConfig.ExchangeMode.LEARNING, PokeTradeConfig.exchangeMode());
+    }
+
+    @Test
+    void exchangeModeEnumExposesLearningAndFull() {
+        assertTrue(java.util.List.of(PokeTradeConfig.ExchangeMode.values())
+                .containsAll(java.util.List.of(
+                        PokeTradeConfig.ExchangeMode.LEARNING,
+                        PokeTradeConfig.ExchangeMode.FULL)));
+    }
 }

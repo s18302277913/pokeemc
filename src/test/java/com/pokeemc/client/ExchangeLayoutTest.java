@@ -106,4 +106,40 @@ class ExchangeLayoutTest {
         assertEquals(layout.left().y() + 28, category.y());
         assertEquals(layout.left().y() + 28, filter.y());
     }
+
+    /** [NEW] 会话 #21-H：目录模式指示器 modeText 在中栏顶行左缘，搜索框右移让位后二者不相交。 */
+    @Test
+    void modeTextSitsLeftOfSearchWithoutOverlapInEveryCollapseState() {
+        for (Layout layout : ALL_STATES) {
+            Rect modeText = layout.modeText();
+            Rect search = layout.search();
+            assertTrue(layout.contains(modeText), "modeText outside window " + layout);
+            assertTrue(layout.contains(search), "search outside window " + layout);
+            assertFalse(modeText.overlaps(search), modeText + " overlaps " + search);
+            // modeText 紧贴搜索框左侧；搜索框右缘不越过分页按钮（让位后间距不变）
+            assertTrue(modeText.right() <= search.x(),
+                    "modeText should sit left of search: " + layout);
+            assertTrue(search.right() <= layout.pagePrev().x(),
+                    "search right edge must stay left of pagePrev: " + layout);
+        }
+    }
+
+    /** 会话 #16 组 4（任务 C）：范围控件收窄后与右侧「一键出售(整箱全部)」按钮不重叠、贴左栏右缘。 */
+    @Test
+    void sellWholeButtonSitsRightOfRadiusInputInsideLeftColumn() {
+        Layout layout = Layout.expanded();
+        Rect radiusInput = layout.radiusInput();
+        Rect sellWhole = layout.sellWhole();
+        assertTrue(radiusInput.x() >= layout.left().x()
+                && radiusInput.right() <= layout.left().right());
+        assertFalse(sellWhole.overlaps(radiusInput), sellWhole + " overlaps " + radiusInput);
+        assertTrue(sellWhole.x() >= layout.left().x()
+                && sellWhole.right() <= layout.left().right(),
+                sellWhole + " outside left column");
+        assertEquals(layout.left().y() + 2, sellWhole.y());
+        // 按钮右缘贴左栏右缘（预留 1px 描边余量）
+        assertTrue(sellWhole.right() >= layout.left().right() - 1
+                        && sellWhole.right() <= layout.left().right(),
+                "sellWhole right=" + sellWhole.right() + " left.right=" + layout.left().right());
+    }
 }

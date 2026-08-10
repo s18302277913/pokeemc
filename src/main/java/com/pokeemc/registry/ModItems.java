@@ -2,6 +2,7 @@ package com.pokeemc.registry;
 
 import com.pokeemc.PokeEMC;
 import com.pokeemc.id.ModIdAliases;
+import com.pokeemc.item.PortableTransmutationTableItem;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
 import net.neoforged.bus.api.IEventBus;
@@ -16,6 +17,8 @@ import net.neoforged.neoforge.registries.DeferredRegister;
  *   <li>凡斯燃料：熔炼熔火燃料，价值再翻倍，终极燃料货币</li>
  * </ul>
  * 玩家通过合成不断增值，燃料可投入转化桌/凝聚器变现，形成"印钱"经济循环。
+ *
+ * <p>[CHANGED] 会话 #28：新增便携式转化桌（手持右键打开交易所界面）。</p>
  */
 public class ModItems {
     public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(PokeEMC.MODID);
@@ -28,6 +31,11 @@ public class ModItems {
 
     public static final DeferredItem<Item> AETERNALIS_FUEL = ITEMS.register("aeternalis_fuel",
             () -> new Item(new Item.Properties()));
+
+    // [CHANGED] 会话 #28：便携式转化桌（单手持握、右键打开交易所）
+    public static final DeferredItem<Item> PORTABLE_TRANSMUTATION_TABLE = ITEMS.register(
+            "portable_transmutation_table",
+            () -> new PortableTransmutationTableItem(new Item.Properties().stacksTo(1)));
 
     public static void register(IEventBus bus) {
         ModIdAliases.itemAliases().forEach((legacy, current) -> {

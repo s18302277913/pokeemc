@@ -53,12 +53,29 @@ public class PkmDataLoader extends SimpleJsonResourceReloadListener {
             }
             JsonObject values = obj.getAsJsonObject("values");
             for (Map.Entry<String, JsonElement> v : values.entrySet()) {
-                ResourceLocation key = ResourceLocation.tryParse(v.getKey());
-                if (key == null) {
-                    LOGGER.warn("PokeEMC: invalid item id '{}' in {}", v.getKey(), entry.getKey());
+                String keyStr = v.getKey();
+                long pkm = v.getValue().getAsLong();
+                // [CHANGED] 会话 #16：球种级 PKM 键 `pixelmon:poke_ball#<球种>`（ADR-52/53 的 '#' 编码），
+                // 直接喂入球层（setBallManual，不写 PKM_VALUES），避免 `pixelmon:<球种>` 幽灵 id
+                // 流入 pkmFallback 目录兜底（大师球 tooltip 显示 256 修复）。普通键走原 setManual。
+                int sep = keyStr.indexOf('#');
+                if (sep >= 0) {
+                    String base = keyStr.substring(0, sep);
+                    String ballName = keyStr.substring(sep + 1);
+                    if ("pixelmon:poke_ball".equals(base) && !ballName.isBlank()) {
+                        PKMManager.setBallManual(ballName, pkm);
+                        count++;
+                    } else {
+                        LOGGER.warn("PokeEMC: invalid ball id '{}' in {} (base must be pixelmon:poke_ball)",
+                                keyStr, entry.getKey());
+                    }
                     continue;
                 }
-                long pkm = v.getValue().getAsLong();
+                ResourceLocation key = ResourceLocation.tryParse(keyStr);
+                if (key == null) {
+                    LOGGER.warn("PokeEMC: invalid item id '{}' in {}", keyStr, entry.getKey());
+                    continue;
+                }
                 PKMManager.setManual(key, pkm);
                 count++;
             }
